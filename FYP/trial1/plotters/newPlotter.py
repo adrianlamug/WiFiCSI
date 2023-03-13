@@ -1,12 +1,13 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from trial1.utils.matlab import db
-from trial1.decoders.realtimecsi import hampel_filter, moving_average, searchVariance
-from trial1.decoders.interleaved import read_pcap
+from FYP.trial1.utils.matlab import db
+from FYP.trial1.decoders.realtimecsi import hampel_filter, moving_average, searchVariance
+from FYP.trial1.decoders.interleaved import read_pcap
 from time import time
 from scipy import signal
 import matplotlib.animation as animation
+import os
 '''
 Amplitude plotter
 ---------------------------
@@ -58,9 +59,12 @@ class Plotter():
         plt.xlabel(x_label)
         plt.ylabel("Subcarrier Index")
 
-        plt.title("No activity")
+        name, ext = os.path.splitext(os.path.basename(self.pcap_file))
+        plt.title(os.path.basename(name))
+        plt.plot()
+        # plt.savefig("../static/images/generated.png")
 
-        plt.show()
+        # plt.show()
 
     def mean_difference(self):
         mean_corr = 0.9971
@@ -119,7 +123,8 @@ def heatmap(data):
 
     plt.title("Test")
 
-    plt.show()
+    # plt.show()
+
 
 def heatmap2(data):
     csi = data.csi
@@ -189,5 +194,6 @@ def animate(frame):
 # heatmap2(data2)
 
 if __name__ == "__main__":
-    plotter = Plotter("../data/standing-1677947268.pcap", 200, 80)
-    plotter.mean_difference()
+    plotter = Plotter("../data/standing-1677947343.pcap", 200, 80)
+    plotter.heatmap()
+    # plotter.mean_difference()

@@ -3,8 +3,8 @@ from typing import Tuple
 
 import numpy as np
 
-from trial1.CSI.frame import NexmonCSIMetadata
-from trial1.Frame.pcap import PcapFrame
+from FYP.trial1.CSI.frame import NexmonCSIMetadata
+from FYP.trial1.Frame.pcap import PcapFrame
 
 class CSIData:
 
