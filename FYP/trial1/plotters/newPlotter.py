@@ -194,6 +194,6 @@ def animate(frame):
 # heatmap2(data2)
 
 if __name__ == "__main__":
-    plotter = Plotter("../data/standing-1677947343.pcap", 200, 80)
+    plotter = Plotter("../generated/data/falling.pcap", 200, 80)
     plotter.heatmap()
     # plotter.mean_difference()

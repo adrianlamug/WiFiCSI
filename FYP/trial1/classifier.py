@@ -1,39 +1,69 @@
 import pandas as pd
 import numpy as np
+import statistics
 import matplotlib.pyplot as plt
 from FYP.trial1.decoders.interleaved import read_pcap
 import os
-from tensorflow.keras.preprocessing.image import load_img, img_to_array, array_to_img
-from tensorflow.keras.preprocessing import image_dataset_from_directory
-
-from tensorflow.keras import Model
-from tensorflow.keras import Input
-from tensorflow.keras import Sequential
-from tensorflow.keras.layers import RandomFlip
-from tensorflow.keras.layers import RandomRotation
-from tensorflow.keras.layers import RandomZoom
-from tensorflow.keras.layers import RandomTranslation
-from tensorflow.keras.layers import Rescaling
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.layers import Conv2D
-from tensorflow.keras.layers import MaxPooling2D
-from tensorflow.keras.layers import Flatten
-from tensorflow.keras.layers import Dropout
-from tensorflow.keras.layers import BatchNormalization
-
-from tensorflow.keras.optimizers import RMSprop
 from tensorflow.keras.models import load_model
+from scipy.interpolate import interp1d
+from FYP.trial1.utils.matlab import db
+from numpy import inf
 
 
-from tensorflow.keras.callbacks import EarlyStopping
+activities = ["static", "standing", "walking" , "falling"]
 
-from tensorflow.keras.applications import ResNet50
-from tensorflow.keras.applications.resnet50 import preprocess_input, decode_predictions
+FS = 100
+def loadFromDat(inputFile, windowSize=FS, step=50):
+    #     print(int((csi_data.nsamples-1)*(100/average_sample_rate)+1))
+
+    csi_data = read_pcap(inputFile)
+    csi = csi_data.csi
+
+    first_timestamp = float(csi_data.timestamps[0])
+    last_timestamp = float(csi_data.timestamps[-1])
+    final_timestamp = last_timestamp - first_timestamp
+    average_sample_rate = csi_data.nsamples / final_timestamp
+
+    interp_func = interp1d(csi_data.timestamps, csi_data.csi, kind='linear', axis=0, fill_value="extrapolate")
+    t_new = np.linspace(first_timestamp, last_timestamp, (csi_data.nsamples - 1) * int((100 / average_sample_rate) + 1))
+    csi_interp = interp_func(t_new)
+    csi = csi_interp
+
+    csi = db(np.abs(csi))
+    finalData = csi[:, :, 0]
+    finalData = np.transpose(finalData)
+
+    new_average_sample_rate = len(csi_interp) / final_timestamp
+
+    if new_average_sample_rate > FS:
+        downsample_factor = int(new_average_sample_rate / FS)
+        csi = csi[::downsample_factor]
+    index = 0
+    positiveInput = []
+
+    while index + windowSize <= csi.shape[0]:
+        curFeature = np.zeros((1, windowSize, 256))
+        curFeature[0] = csi[index:index + windowSize, :].reshape(100, 256)
+        positiveInput.append(curFeature)
+        index += step
+    try:
+        positiveInput = np.concatenate(positiveInput, axis=0)
+    except ValueError as e:
+        positiveInput = np.zeros((1, windowSize, 256))
+    positiveInput[positiveInput == -inf] = 0
+
+    return positiveInput
 
 best_network = load_model("best_network.h5")
+test_dir = os.path.join("generated/data")
+x = loadFromDat(f"{test_dir}/falling.pcap")
+x_pred = best_network.predict(x)
+ensemble = []
+for i in range(len(x_pred)):
+    ensemble.append(np.argmax(x_pred[i]))
+mode_value = statistics.mode(ensemble)
 
-path = "/generated/data/falling.pcap"
-read_pcap(path)
-all_activities = ["static", "standing", "walking", "falling"]
 
-best_network.predict(path)
+print(f"The activity classified is: {activities[mode_value]}")
+
+
