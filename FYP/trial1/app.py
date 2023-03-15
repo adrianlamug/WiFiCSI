@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, redirect, flash, get_flashed_messages
 from FYP.trial1.plotters.newPlotter import Plotter
+from FYP.trial1.classifier import classify
 import matplotlib.pyplot as plt
 import os
 import random
@@ -108,11 +109,13 @@ def recordActivity():
     filePath = f'generated/data/{activity}.pcap'
     sftp.get(f'{activity}.pcap', filePath)
     sftp.close()
-
+    classifiedActivity = classify(pcapFile=filePath)
     createPlotter(filePath)
     # stdin, stdout, stderr = ssh.exec_command(f"sudo tcpdump -i wlan0 dst port 5500 -vv -w test-%s.pcap -G 3 -W 1 -Z root")
     # result = stdout.read().decode()
     plotPath = os.path.join('static/images', 'generated.png')
-    return render_template('index.html', plot_path=plotPath)
+    return render_template('index.html', plot_path=plotPath, classifiedActivity=classifiedActivity)
+
+
 if __name__ == '__main__':
     app.run(debug=True)

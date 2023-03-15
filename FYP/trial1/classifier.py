@@ -11,8 +11,8 @@ from numpy import inf
 
 
 activities = ["static", "standing", "walking" , "falling"]
-
 FS = 100
+
 def loadFromDat(inputFile, windowSize=FS, step=50):
     #     print(int((csi_data.nsamples-1)*(100/average_sample_rate)+1))
 
@@ -54,16 +54,23 @@ def loadFromDat(inputFile, windowSize=FS, step=50):
 
     return positiveInput
 
-best_network = load_model("best_network.h5")
-test_dir = os.path.join("generated/data")
-x = loadFromDat(f"{test_dir}/falling.pcap")
-x_pred = best_network.predict(x)
-ensemble = []
-for i in range(len(x_pred)):
-    ensemble.append(np.argmax(x_pred[i]))
-mode_value = statistics.mode(ensemble)
+def classify(pcapFile, model="best_network.h5"):
+    best_network = load_model(model)
+    x = loadFromDat(pcapFile)
+    x_pred = best_network.predict(x)
+    ensemble = []
+    for i in range(len(x_pred)):
+        ensemble.append(np.argmax(x_pred[i]))
+    mode_value = statistics.mode(ensemble)
+    return f"The activity classified is: {activities[mode_value]}"
 
 
-print(f"The activity classified is: {activities[mode_value]}")
+
+if __name__ == '__main__':
+    test_dir = os.path.join("generated/data")
+    pcapFile = f"{test_dir}/falling.pcap"
+    model = "best_network.h5"
+    classify(pcapFile, model)
+
 
 
