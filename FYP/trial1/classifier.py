@@ -54,23 +54,19 @@ def loadFromDat(inputFile, windowSize=FS, step=50):
 
     return positiveInput
 
-def classify(pcapFile, model="best_network.h5"):
+def classify(pcapFile, model):
     best_network = load_model(model)
     x = loadFromDat(pcapFile)
     x_pred = best_network.predict(x)
+    print(x_pred)
     ensemble = []
     for i in range(len(x_pred)):
         ensemble.append(np.argmax(x_pred[i]))
     mode_value = statistics.mode(ensemble)
     return f"The activity classified is: {activities[mode_value]}"
 
-
-
 if __name__ == '__main__':
     test_dir = os.path.join("generated/data")
-    pcapFile = f"{test_dir}/falling.pcap"
-    model = "best_network.h5"
-    classify(pcapFile, model)
-
-
-
+    pcapFile = f"{test_dir}/walking-1.pcap"
+    model = "current_best_network.h5"
+    print(classify(pcapFile, model))

@@ -64,7 +64,7 @@ class Plotter():
         plt.plot()
         # plt.savefig("../static/images/generated.png")
 
-        # plt.show()
+        plt.show()
 
     def mean_difference(self):
         mean_corr = 0.9971
@@ -194,6 +194,6 @@ def animate(frame):
 # heatmap2(data2)
 
 if __name__ == "__main__":
-    plotter = Plotter("../generated/data/falling.pcap", 200, 80)
+    plotter = Plotter("../generated/data/falling-1.pcap", 200, 80)
     plotter.heatmap()
     # plotter.mean_difference()
