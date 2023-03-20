@@ -67,6 +67,6 @@ def classify(pcapFile, model):
 
 if __name__ == '__main__':
     test_dir = os.path.join("generated/data")
-    pcapFile = f"{test_dir}/walking-1.pcap"
+    pcapFile = f"{test_dir}/standing.pcap"
     model = "current_best_network.h5"
     print(classify(pcapFile, model))
