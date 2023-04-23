@@ -1,9 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from FYP.trial1.utils.matlab import db
-from FYP.trial1.decoders.realtimecsi import hampel_filter, moving_average, searchVariance
-from FYP.trial1.decoders.interleaved import read_pcap
+from utils.matlab import db
+from decoders.realtimecsi import hampel_filter, moving_average, searchVariance
+from decoders.interleaved import read_pcap
 from time import time
 from scipy import signal
 import matplotlib.animation as animation
@@ -59,9 +59,9 @@ class Plotter():
         name, ext = os.path.splitext(os.path.basename(self.pcap_file))
         plt.title(os.path.basename(name))
         plt.plot()
-        # plt.savefig("../static/images/generated.png")
+        # plt.savefig("/static/images/generated.png")
 
-        plt.show()
+        # plt.show()
 
     def mean_difference(self):
         mean_corr = 0.9971
@@ -93,7 +93,29 @@ class Plotter():
         differences = amplitudes - mean
         mean_difference = np.mean(differences, axis=1)
         print(mean_difference)
+    def animate(self, frame):
+        data = pd.read_csv("../listener/data/test-amp.csv")
+        temp_amplitude = data.iloc[frame]
+        _, ax = plt.subplots()
+        for i in range(window_size - 1, -1, -1):
+            copy_amp = np.copy(temp_frames[0, :, i][:])
+            temp_frames[0, :, i] = temp_amplitude
+            temp_amplitude = copy_amp
+            ax.clear()
+            amplitudes = temp_frames[0, :, -1 * 10:]
+            # currentSubcarrier = searchVariance(amplitudes, 256, k=12)
+            # for subcarrier in range(46,46):
+            #     amplitudes = temp_frames[0, subcarrier, :]
+                # plt.imshow(amplitudes, interpolation="nearest", aspect="auto", cmap="jet")
+                # plt.colorbar()
+                # ax.plot(range(window_size), amplitudes, label=str(subcarrier))
+            amplitudes = temp_frames[0, 46, :]
+            ax.plot(range(window_size), amplitudes, label=str(46))
 
+        ax.legend()
+        ax.set_xlabel("Index")
+        ax.set_ylabel("Value")
+        ax.set_title(f"Frame {frame}")
 
 temp_frames = np.zeros((2, 256, 200))
 window_size = 1000
@@ -156,29 +178,36 @@ def heatmap2(data):
 
     plt.show()
 
-
-def animate(frame):
-    temp_amplitude = data.iloc[frame]
-    for i in range(window_size -1, -1, -1):
-        copy_amp = np.copy(temp_frames[0, :, i][:])
-        temp_frames[0, :, i] = temp_amplitude
-        temp_amplitude = copy_amp
-        ax.clear()
-        amplitudes = temp_frames[0, :, -1 * 10:]
-        # currentSubcarrier = searchVariance(amplitudes, 256, k=12)
-        for subcarrier in range(256):
-            amplitudes = temp_frames[0, subcarrier, :]
-            # plt.imshow(amplitudes, interpolation="nearest", aspect="auto", cmap="jet")
-            # plt.colorbar()
-            ax.plot(range(window_size), amplitudes, label=str(subcarrier))
-
-    ax.legend()
-    ax.set_xlabel("Index")
-    ax.set_ylabel("Value")
-    ax.set_title(f"Frame {frame}")
-
+# def animate(frame):
+#     temp_amplitude = data.iloc[frame]
+#     for i in range(window_size - 1, -1, -1):
+#         copy_amp = np.copy(temp_frames[0, :, i][:])
+#         temp_frames[0, :, i] = temp_amplitude
+#         temp_amplitude = copy_amp
+#         ax.clear()
+#         amplitudes = temp_frames[0, :, -1 * 10:]
+#         # currentSubcarrier = searchVariance(amplitudes, 256, k=12)
+#         # for subcarrier in range(46,46):
+#         #     amplitudes = temp_frames[0, subcarrier, :]
+#             # plt.imshow(amplitudes, interpolation="nearest", aspect="auto", cmap="jet")
+#             # plt.colorbar()
+#             # ax.plot(range(window_size), amplitudes, label=str(subcarrier))
+#         amplitudes = temp_frames[0, 46, :]
+#         ax.plot(range(window_size), amplitudes, label=str(46))
+#
+#     ax.legend()
+#     ax.set_xlabel("Index")
+#     ax.set_ylabel("Value")
+#     ax.set_title(f"Frame {frame}")
+# data = pd.read_csv("../listener/data/test-amp.csv")
+# ani = animation.FuncAnimation(plt.gcf(), animate, frames=data.index, interval=100 )
+# plt.tight_layout()
+# plt.show()
 
 if __name__ == "__main__":
-    plotter = Plotter("../generated/data/falling-1.pcap", 200, 80)
-    plotter.heatmap()
+    plotter = Plotter("../generated/data/falling.pcap", 200, 80)
+    # plotter.heatmap()
+
+    # plotter = Plotter("../listener/data/test-amp.csv", 200, 80)
+
     # plotter.mean_difference()

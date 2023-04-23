@@ -295,14 +295,13 @@ def read_frame(frame, bandwidth=0, nsamples_max=1):
 # Signal processing and filtering functions
 
 
-# @jit(nopython=True)
 # reference: https://towardsdatascience.com/outlier-detection-with-hampel-filter-85ddf523c73d
 def hampel_filter(input_series, window_size, n_subcarriers, n_sigmas=3):
     new_series = input_series.copy()
     k = 1.4826  # scale factor for Gaussian distribution
     n = len(new_series[0, :])
-    for subportadora in range(n_subcarriers):
-        amplitudeOfSubcarrier = new_series[subportadora, :].copy()
+    for s in range(n_subcarriers):
+        amplitudeOfSubcarrier = new_series[s, :].copy()
 
         for i in range(window_size, n - window_size + 1):
             x0 = np.nanmedian(amplitudeOfSubcarrier[i - window_size:i + window_size])
@@ -311,19 +310,18 @@ def hampel_filter(input_series, window_size, n_subcarriers, n_sigmas=3):
             if i - window_size == 0:  # if first and last values not available
                 for j in range(window_size + 1):
                     if np.abs(amplitudeOfSubcarrier[j] - x0) > n_sigmas * S0:
-                        new_series[subportadora, j] = x0
+                        new_series[s, j] = x0
             elif i + window_size == n - 1:
                 for j in range(n - window_size, n):
                     if np.abs(amplitudeOfSubcarrier[j] - x0) > n_sigmas * S0:
-                        new_series[subportadora, j] = x0
+                        new_series[s, j] = x0
             else:
                 if np.abs(amplitudeOfSubcarrier[i] - x0) > n_sigmas * S0:
-                    new_series[subportadora, i] = x0
+                    new_series[s, i] = x0
 
     return new_series
 
 
-# @jit(nopython=True)
 # Inspired by https://towardsdatascience.com/moving-averages-in-python-16170e20f6c
 def moving_average(input_series, window_size, n_subcarrier):
     mean_series = input_series.copy()

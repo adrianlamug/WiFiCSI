@@ -1,11 +1,11 @@
 import socket
-
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 # if using draft2 use this
 # sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-sock.bind(('169.254.103.233', 2222))
+sock.bind(('192.168.1.228', 2222))
+# sock.bind(('169.254.103.233', 2222))
 # sock.bind(('169.254.177.92', 2223))
 sock.listen(1)
 while True:

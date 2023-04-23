@@ -1,0 +1,29 @@
+<changelist name="Uncommitted_changes_before_Update_at_19_03_2023_16꞉59_[Changes]" date="1679245158773" recycled="false" toDelete="true">
+  <option name="PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Update_at_19_03_2023_16꞉59_[Changes]/shelved.patch" />
+  <option name="DESCRIPTION" value="Uncommitted changes before Update at 19/03/2023 16꞉59 [Changes]" />
+  <binary>
+    <option name="BEFORE_PATH" value="FYP/trial1/generated/data/walking.pcap" />
+    <option name="AFTER_PATH" />
+    <option name="SHELVED_PATH" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="FYP/trial1/generated/data/static.pcap" />
+    <option name="AFTER_PATH" />
+    <option name="SHELVED_PATH" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="FYP/trial1/generated/data/falling.pcap" />
+    <option name="AFTER_PATH" />
+    <option name="SHELVED_PATH" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="FYP/trial1/best_network.h5" />
+    <option name="AFTER_PATH" value="FYP/trial1/best_network.h5" />
+    <option name="SHELVED_PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Update_at_19_03_2023_16꞉59_[Changes]/best_network.h5" />
+  </binary>
+  <binary>
+    <option name="BEFORE_PATH" value="FYP/trial1/static/images/generated.png" />
+    <option name="AFTER_PATH" value="FYP/trial1/static/images/generated.png" />
+    <option name="SHELVED_PATH" value="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Update_at_19_03_2023_16꞉59_[Changes]/generated.png" />
+  </binary>
+</changelist>

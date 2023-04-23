@@ -54,9 +54,12 @@ def loadFromDat(inputFile, windowSize=FS, step=50):
 
     return positiveInput
 
-def classify(pcapFile, model):
+def classify(pcapFile, model="current_best_network.h5"):
     best_network = load_model(model)
     x = loadFromDat(pcapFile)
+    test_dir = os.path.join("generated/data")
+    pcapFile = f"{test_dir}/generated.pcap"
+    x =loadFromDat(pcapFile)
     x_pred = best_network.predict(x)
     print(x_pred)
     ensemble = []
@@ -67,6 +70,6 @@ def classify(pcapFile, model):
 
 if __name__ == '__main__':
     test_dir = os.path.join("generated/data")
-    pcapFile = f"{test_dir}/standing.pcap"
+    pcapFile = f"{test_dir}/walking.pcap"
     model = "current_best_network.h5"
     print(classify(pcapFile, model))

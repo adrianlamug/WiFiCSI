@@ -1,0 +1,1119 @@
+Index: FYP/trial1/classifier.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import pandas as pd\r\nimport numpy as np\r\nimport statistics\r\nimport matplotlib.pyplot as plt\r\nfrom FYP.trial1.decoders.interleaved import read_pcap\r\nimport os\r\nfrom tensorflow.keras.models import load_model\r\nfrom scipy.interpolate import interp1d\r\nfrom FYP.trial1.utils.matlab import db\r\nfrom numpy import inf\r\n\r\n\r\nactivities = [\"static\", \"standing\", \"walking\" , \"falling\"]\r\nFS = 100\r\n\r\ndef loadFromDat(inputFile, windowSize=FS, step=50):\r\n    #     print(int((csi_data.nsamples-1)*(100/average_sample_rate)+1))\r\n\r\n    csi_data = read_pcap(inputFile)\r\n    csi = csi_data.csi\r\n\r\n    first_timestamp = float(csi_data.timestamps[0])\r\n    last_timestamp = float(csi_data.timestamps[-1])\r\n    final_timestamp = last_timestamp - first_timestamp\r\n    average_sample_rate = csi_data.nsamples / final_timestamp\r\n\r\n    interp_func = interp1d(csi_data.timestamps, csi_data.csi, kind='linear', axis=0, fill_value=\"extrapolate\")\r\n    t_new = np.linspace(first_timestamp, last_timestamp, (csi_data.nsamples - 1) * int((100 / average_sample_rate) + 1))\r\n    csi_interp = interp_func(t_new)\r\n    csi = csi_interp\r\n\r\n    csi = db(np.abs(csi))\r\n    finalData = csi[:, :, 0]\r\n    finalData = np.transpose(finalData)\r\n\r\n    new_average_sample_rate = len(csi_interp) / final_timestamp\r\n\r\n    if new_average_sample_rate > FS:\r\n        downsample_factor = int(new_average_sample_rate / FS)\r\n        csi = csi[::downsample_factor]\r\n    index = 0\r\n    positiveInput = []\r\n\r\n    while index + windowSize <= csi.shape[0]:\r\n        curFeature = np.zeros((1, windowSize, 256))\r\n        curFeature[0] = csi[index:index + windowSize, :].reshape(100, 256)\r\n        positiveInput.append(curFeature)\r\n        index += step\r\n    try:\r\n        positiveInput = np.concatenate(positiveInput, axis=0)\r\n    except ValueError as e:\r\n        positiveInput = np.zeros((1, windowSize, 256))\r\n    positiveInput[positiveInput == -inf] = 0\r\n\r\n    return positiveInput\r\n\r\ndef classify(pcapFile, model=\"best_network.h5\"):\r\n    best_network = load_model(model)\r\n    x = loadFromDat(pcapFile)\r\n    x_pred = best_network.predict(x)\r\n    ensemble = []\r\n    for i in range(len(x_pred)):\r\n        ensemble.append(np.argmax(x_pred[i]))\r\n    mode_value = statistics.mode(ensemble)\r\n    return f\"The activity classified is: {activities[mode_value]}\"\r\n\r\n\r\n\r\nif __name__ == '__main__':\r\n    test_dir = os.path.join(\"generated/data\")\r\n    pcapFile = f\"{test_dir}/falling.pcap\"\r\n    model = \"best_network.h5\"\r\n    classify(pcapFile, model)\r\n\r\n\r\n\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/FYP/trial1/classifier.py b/FYP/trial1/classifier.py
+--- a/FYP/trial1/classifier.py	(revision 4ecaa717c3eff92b88bb8af932d429d947a72f7e)
++++ b/FYP/trial1/classifier.py	(date 1678898648184)
+@@ -16,6 +16,7 @@
+ def loadFromDat(inputFile, windowSize=FS, step=50):
+     #     print(int((csi_data.nsamples-1)*(100/average_sample_rate)+1))
+ 
++    # shape of CSI is (no. frames captured, subcarriers, 1)
+     csi_data = read_pcap(inputFile)
+     csi = csi_data.csi
+ 
+@@ -24,8 +25,12 @@
+     final_timestamp = last_timestamp - first_timestamp
+     average_sample_rate = csi_data.nsamples / final_timestamp
+ 
++    # interpolates the data so that our sampling rate will be roughly 100 Hz (100 samples per second)
+     interp_func = interp1d(csi_data.timestamps, csi_data.csi, kind='linear', axis=0, fill_value="extrapolate")
+-    t_new = np.linspace(first_timestamp, last_timestamp, (csi_data.nsamples - 1) * int((100 / average_sample_rate) + 1))
++    x = int((100 / average_sample_rate) + 1)
++    # 39 samples, sampling rate of 19.58
++    # t_new = np.linspace(first_timestamp, last_timestamp, (csi_data.nsamples - 1) * int((100 / average_sample_rate) + 1))
++    t_new = np.linspace(first_timestamp, last_timestamp, int((csi_data.nsamples) * (100 / average_sample_rate)))
+     csi_interp = interp_func(t_new)
+     csi = csi_interp
+ 
+@@ -68,9 +73,10 @@
+ 
+ if __name__ == '__main__':
+     test_dir = os.path.join("generated/data")
+-    pcapFile = f"{test_dir}/falling.pcap"
++    pcapFile = f"{test_dir}/static.pcap"
+     model = "best_network.h5"
+-    classify(pcapFile, model)
++    print(classify(pcapFile, model))
++
+ 
+ 
+ 
+Index: FYP/trial1/app.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>from flask import Flask, render_template, request, redirect, flash, get_flashed_messages\r\nfrom FYP.trial1.plotters.newPlotter import Plotter\r\nfrom FYP.trial1.classifier import classify\r\nimport matplotlib.pyplot as plt\r\nimport os\r\nimport random\r\nimport glob\r\nimport paramiko\r\nimport uuid\r\nimport socket\r\nimport subprocess\r\n\r\napp = Flask(__name__)\r\napp.secret_key = 'secret123'\r\n\r\n\r\n@app.route('/', methods=['GET', 'POST'])\r\ndef index():\r\n    selected = None\r\n    activities = [\"standing\", \"walking\", \"static\", \"falling\"]\r\n\r\n    result = False\r\n    # if not result:\r\n    #     result = runCommandOnPi()\r\n    messages = get_flashed_messages()\r\n    print(messages)\r\n    if request.method == 'POST':\r\n        selectedActivity = selected = request.form['activity']\r\n        randomPcapFile = getPcapFileBasedOnActivity(selectedActivity)\r\n        createPlotter(randomPcapFile)\r\n        plotPath = os.path.join('static/images','generated.png')\r\n        return render_template('index.html', plot_path=plotPath, selected=selected)\r\n\r\n\r\n    return render_template('index.html', activities=activities,  messages=messages)\r\n\r\ndef createPlotter(pcapFile):\r\n    plotter = Plotter(pcapFile, 200, 80)\r\n    plotter.heatmap()\r\n    plt.savefig('static/images/generated.png')\r\n\r\ndef getPcapFileBasedOnActivity(activity):\r\n    baseDir = os.path.abspath(os.path.dirname(__file__))\r\n    # /{activity}-*.pcap\r\n    pattern = f\"data\\{activity}-*.pcap\"\r\n    folderPath = os.path.join(baseDir, pattern)\r\n    fileList = glob.glob(folderPath)\r\n    randomPcapFile = random.choice(fileList)\r\n\r\n    return os.path.join(folderPath, randomPcapFile)\r\n\r\ndef getMacAddress():\r\n    hostname = socket.gethostname()\r\n    mac = uuid.UUID(int=uuid.getnode()).hex[-12:]\r\n    return \":\".join([mac[e:e + 2] for e in range(0, 12, 2)])\r\n\r\n@app.route('/run-command', methods=['POST'])\r\ndef runCommandOnPi():\r\n    rpiIP = \"192.168.1.154\"\r\n    macOfDevice =getMacAddress().upper()\r\n\r\n    ssh = paramiko.SSHClient()\r\n    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())\r\n    ssh.connect(rpiIP, username=\"pi\", password=\"pi1234\")\r\n\r\n    # stdin, stdout, stderr = ssh.exec_command(f\"mcp -C 1 -N 1 -c 36/80 -m {macOfDevice}\")\r\n\r\n    # debugging\r\n    stdin, stdout, stderr = ssh.exec_command(f\"mcp -C 1 -N 1 -c 36/80\")\r\n    result = stdout.read().decode()\r\n\r\n    results = []\r\n    commands = [\r\n        \"sudo ifconfig wlan0 up\",\r\n        f\"nexutil -Iwlan0 -s500 -b -l34 -v{result}\",\r\n        \"iw dev wlan0 interface add mon0 type monitor\",\r\n        \"sudo ip link set mon0 up\"\r\n    ]\r\n    for command in commands:\r\n        stdin, stdout, stderr = ssh.exec_command(command)\r\n        r = stdout.read().decode()\r\n        results.append(r)\r\n    ssh.close()\r\n    flash('Command executed successfully.')\r\n    return redirect('/')\r\n\r\n@app.route('/record-activity', methods=['POST'])\r\ndef recordActivity():\r\n    activity = request.form['activity'].lower()\r\n    rpiIP = \"192.168.1.154\"\r\n    macOfDevice = getMacAddress().upper()\r\n\r\n    ssh = paramiko.SSHClient()\r\n    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())\r\n    ssh.connect(rpiIP, username=\"pi\", password=\"pi1234\")\r\n    results = []\r\n    commands = [\r\n        # f\"sudo tcpdump -i wlan0 dst port 5500 -vv -w {activity}-%s.pcap -G 3 -W 1 -Z root\",\r\n        f\"sudo tcpdump -i wlan0 dst port 5500 -vv -w {activity}.pcap -G 3 -W 1 -Z root\",\r\n        \"ls\"\r\n    ]\r\n    for command in commands:\r\n        stdin, stdout, stderr = ssh.exec_command(command)\r\n        r = stdout.read().decode()\r\n        results.append(r)\r\n\r\n    # transferring recorded activity pcap file\r\n    sftp = ssh.open_sftp()\r\n    filePath = f'generated/data/{activity}.pcap'\r\n    sftp.get(f'{activity}.pcap', filePath)\r\n    sftp.close()\r\n    classifiedActivity = classify(pcapFile=filePath)\r\n    createPlotter(filePath)\r\n    # stdin, stdout, stderr = ssh.exec_command(f\"sudo tcpdump -i wlan0 dst port 5500 -vv -w test-%s.pcap -G 3 -W 1 -Z root\")\r\n    # result = stdout.read().decode()\r\n    plotPath = os.path.join('static/images', 'generated.png')\r\n    return render_template('index.html', plot_path=plotPath, classifiedActivity=classifiedActivity)\r\n\r\n\r\nif __name__ == '__main__':\r\n    app.run(debug=True)
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/FYP/trial1/app.py b/FYP/trial1/app.py
+--- a/FYP/trial1/app.py	(revision 4ecaa717c3eff92b88bb8af932d429d947a72f7e)
++++ b/FYP/trial1/app.py	(date 1678886283883)
+@@ -57,16 +57,17 @@
+ @app.route('/run-command', methods=['POST'])
+ def runCommandOnPi():
+     rpiIP = "192.168.1.154"
+-    macOfDevice =getMacAddress().upper()
++    # macOfDevice =getMacAddress().upper()
++    macOfDevice = "B4:86:55:F4:8B:9E"
+ 
+     ssh = paramiko.SSHClient()
+     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+     ssh.connect(rpiIP, username="pi", password="pi1234")
+-
+-    # stdin, stdout, stderr = ssh.exec_command(f"mcp -C 1 -N 1 -c 36/80 -m {macOfDevice}")
++    print(f"mcp -C 1 -N 1 -c 36/80 -m {macOfDevice}")
++    stdin, stdout, stderr = ssh.exec_command(f"mcp -C 1 -N 1 -c 36/80 -m {macOfDevice}")
+ 
+     # debugging
+-    stdin, stdout, stderr = ssh.exec_command(f"mcp -C 1 -N 1 -c 36/80")
++    # stdin, stdout, stderr = ssh.exec_command(f"mcp -C 1 -N 1 -c 36/80")
+     result = stdout.read().decode()
+ 
+     results = []
+@@ -96,7 +97,7 @@
+     results = []
+     commands = [
+         # f"sudo tcpdump -i wlan0 dst port 5500 -vv -w {activity}-%s.pcap -G 3 -W 1 -Z root",
+-        f"sudo tcpdump -i wlan0 dst port 5500 -vv -w {activity}.pcap -G 3 -W 1 -Z root",
++        f"sleep 2; sudo tcpdump -i wlan0 dst port 5500 -vv -w {activity}.pcap -G 3 -W 1 -Z root",
+         "ls"
+     ]
+     for command in commands:
+Index: FYP/trial1/plotters/newPlotter.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import numpy as np\r\nimport matplotlib.pyplot as plt\r\nimport pandas as pd\r\nfrom FYP.trial1.utils.matlab import db\r\nfrom FYP.trial1.decoders.realtimecsi import hampel_filter, moving_average, searchVariance\r\nfrom FYP.trial1.decoders.interleaved import read_pcap\r\nfrom time import time\r\nfrom scipy import signal\r\nimport matplotlib.animation as animation\r\nimport os\r\n'''\r\nAmplitude plotter\r\n---------------------------\r\n\r\nPlot Amplitude and Phase of CSI frame_info\r\nand update the plots in the same window.\r\n\r\nInitiate Plotter with bandwidth, and\r\ncall update with CSI value.\r\n\r\n'''\r\n\r\n\r\nclass Plotter():\r\n    def __init__(self, pcap_file, window_size, bandwidth):\r\n        self.pcap_file = pcap_file\r\n        self.window_size = window_size\r\n\r\n        self.data = read_pcap(self.pcap_file)\r\n        self.bandwidth = self.data.bandwidth\r\n        self.csi = self.data.csi\r\n        self.no_subcarriers = int(3.2 * self.bandwidth)\r\n        self.timestamps = self.data.timestamps\r\n\r\n        # self.temp_frames = np.zeros((2, 3.2*self.bandwidth, 200))\r\n\r\n\r\n\r\n    def heatmap(self):\r\n        amplitudes = np.abs(self.csi)\r\n        dBm = db(amplitudes)\r\n        finalData = dBm[:, :, 0]\r\n\r\n        # subcarriers * amplitude\r\n        finalData = np.transpose(finalData)\r\n        x_label = \"Time (s)\"\r\n        x = self.timestamps\r\n        x = [timestamp - x[0] for timestamp in x]\r\n        avg_sample_rate = self.data.nsamples / x[-1]\r\n        xlim = max(x)\r\n\r\n        limits = [0, xlim, 1, self.no_subcarriers]\r\n\r\n        _, ax = plt.subplots()\r\n        im = ax.imshow(finalData, cmap=\"jet\", extent=limits, aspect=\"auto\")\r\n        cbar = ax.figure.colorbar(im, ax=ax)\r\n        cbar.ax.set_ylabel(\"Amplitude (dBm)\")\r\n\r\n        plt.xlabel(x_label)\r\n        plt.ylabel(\"Subcarrier Index\")\r\n\r\n        name, ext = os.path.splitext(os.path.basename(self.pcap_file))\r\n        plt.title(os.path.basename(name))\r\n        plt.plot()\r\n        # plt.savefig(\"../static/images/generated.png\")\r\n\r\n        # plt.show()\r\n\r\n    def mean_difference(self):\r\n        mean_corr = 0.9971\r\n        diff_corr = 0.0080\r\n        moving_threshold = 0.15\r\n        notmoving_threshold = 0.05\r\n        containsMovement_threshold = mean_corr-(diff_corr*2)\r\n        prev_frame = None\r\n        sti_values = []\r\n        corr_values = []\r\n\r\n        amplitudes = np.abs(self.csi)\r\n        dBm = db(amplitudes)\r\n        finalData = dBm[:, :, 0]\r\n\r\n        # subcarriers * amplitude\r\n        finalData = np.transpose(finalData)\r\n        x_label = \"Time (s)\"\r\n        x = self.timestamps\r\n        x = [timestamp - x[0] for timestamp in x]\r\n        avg_sample_rate = self.data.nsamples / x[-1]\r\n\r\n        prev_frame = self.csi[0]\r\n        for x in range(finalData[0] - 1):\r\n            frame = finalData[x+1]\r\n\r\n        amplitudes = np.abs(self.csi)\r\n        mean = np.mean(amplitudes)\r\n        differences = amplitudes - mean\r\n        mean_difference = np.mean(differences, axis=1)\r\n        print(mean_difference)\r\n\r\n\r\ntemp_frames = np.zeros((2, 256, 200))\r\nwindow_size = 1000\r\n# data = pd.read_csv(\"../listener/data/test-amp.csv\")\r\n# data = read_pcap(\"../data/walking-1677946656.pcap\")\r\n# data2 = read_pcap(\"../data/static-1677946272.pcap\")\r\ndef heatmap(data):\r\n    csi = np.transpose(data)\r\n    no_frames = window_size\r\n    no_subcarriers = 256\r\n\r\n    x_label = \"Frame No.\"\r\n    xlim = no_frames\r\n\r\n    limits = [0, xlim, 1, no_subcarriers]\r\n\r\n    _,ax = plt.subplots()\r\n    im = ax.imshow(csi, cmap=\"jet\", extent=limits, aspect=\"auto\")\r\n    cbar = ax.figure.colorbar(im, ax=ax)\r\n    cbar.ax.set_ylabel(\"Amplitude (dBm)\")\r\n\r\n    plt.xlabel(x_label)\r\n    plt.ylabel(\"Subcarrier Index\")\r\n\r\n    plt.title(\"Test\")\r\n\r\n    # plt.show()\r\n\r\n\r\ndef heatmap2(data):\r\n    csi = data.csi\r\n    csi_shape = csi[0].shape\r\n\r\n    amplitudes = np.abs(csi)\r\n    dBm = db(amplitudes)\r\n    finalData = dBm[:, :, 0]\r\n\r\n    # subcarriers * amplitude\r\n    finalData = np.transpose(finalData)\r\n    no_frames = data.nsamples\r\n    no_subcarriers = int(3.2* data.bandwidth)\r\n\r\n    x_label = \"Time (s)\"\r\n    x = data.timestamps\r\n    x = [timestamp - x[0] for timestamp in x]\r\n    avg_sample_rate = no_frames/x[-1]\r\n    xlim = max(x)\r\n\r\n    limits = [0, xlim, 1, no_subcarriers]\r\n\r\n    _,ax = plt.subplots()\r\n    im = ax.imshow(finalData, cmap=\"jet\", extent=limits, aspect=\"auto\")\r\n    cbar = ax.figure.colorbar(im, ax=ax)\r\n    cbar.ax.set_ylabel(\"Amplitude (dBm)\")\r\n\r\n    plt.xlabel(x_label)\r\n    plt.ylabel(\"Subcarrier Index\")\r\n\r\n    plt.title(\"No activity\")\r\n\r\n    plt.show()\r\n\r\n\r\ndef animate(frame):\r\n    temp_amplitude = data.iloc[frame]\r\n    for i in range(window_size -1, -1, -1):\r\n        copy_amp = np.copy(temp_frames[0, :, i][:])\r\n        temp_frames[0, :, i] = temp_amplitude\r\n        temp_amplitude = copy_amp\r\n        ax.clear()\r\n        amplitudes = temp_frames[0, :, -1 * 10:]\r\n        # currentSubcarrier = searchVariance(amplitudes, 256, k=12)\r\n        for subcarrier in range(256):\r\n            amplitudes = temp_frames[0, subcarrier, :]\r\n            # plt.imshow(amplitudes, interpolation=\"nearest\", aspect=\"auto\", cmap=\"jet\")\r\n            # plt.colorbar()\r\n            ax.plot(range(window_size), amplitudes, label=str(subcarrier))\r\n\r\n    # for subcarrier in range(30,60):\r\n    #     amplitudes = temp_frames[0, subcarrier, :]\r\n    #     ax.plot(range(window_size), amplitudes, label=str(subcarrier))\r\n        # ax.plot(x, [y[i],y[i+1]], label=f\"Subcarrier {i}\")\r\n    # ax.plot(x, k, label=f\"Subcarrier\")\r\n\r\n    ax.legend()\r\n    ax.set_xlabel(\"Index\")\r\n    ax.set_ylabel(\"Value\")\r\n    ax.set_title(f\"Frame {frame}\")\r\n# ani = animation.FuncAnimation(fig, animate, frames=data.index, interval=100)\r\n# _ = ani\r\n# plt.tight_layout()\r\n# plt.show()\r\n\r\n# heatmap2(data2)\r\n# heatmap2(data2)\r\n\r\nif __name__ == \"__main__\":\r\n    plotter = Plotter(\"../generated/data/falling.pcap\", 200, 80)\r\n    plotter.heatmap()\r\n    # plotter.mean_difference()
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/FYP/trial1/plotters/newPlotter.py b/FYP/trial1/plotters/newPlotter.py
+--- a/FYP/trial1/plotters/newPlotter.py	(revision 4ecaa717c3eff92b88bb8af932d429d947a72f7e)
++++ b/FYP/trial1/plotters/newPlotter.py	(date 1679232603603)
+@@ -34,8 +34,6 @@
+ 
+         # self.temp_frames = np.zeros((2, 3.2*self.bandwidth, 200))
+ 
+-
+-
+     def heatmap(self):
+         amplitudes = np.abs(self.csi)
+         dBm = db(amplitudes)
+@@ -64,7 +62,7 @@
+         plt.plot()
+         # plt.savefig("../static/images/generated.png")
+ 
+-        # plt.show()
++        plt.show()
+ 
+     def mean_difference(self):
+         mean_corr = 0.9971
+@@ -194,6 +192,6 @@
+ # heatmap2(data2)
+ 
+ if __name__ == "__main__":
+-    plotter = Plotter("../generated/data/falling.pcap", 200, 80)
++    plotter = Plotter("../generated/data/walking.pcap", 200, 80)
+     plotter.heatmap()
+     # plotter.mean_difference()
+\ No newline at end of file
+Index: FYP/trial1/FYPModel.ipynb
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>{\r\n \"cells\": [\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 1,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"from decoders.interleaved import read_pcap\\n\",\r\n    \"from utils.matlab import db\\n\",\r\n    \"from tensorflow.keras import Model\\n\",\r\n    \"from tensorflow.keras import Input\\n\",\r\n    \"from tensorflow.keras.layers import Rescaling\\n\",\r\n    \"from tensorflow.keras.layers import Dense\\n\",\r\n    \"from tensorflow.keras.layers import Conv1D\\n\",\r\n    \"from tensorflow.keras.layers import MaxPooling1D\\n\",\r\n    \"from tensorflow.keras.layers import Flatten\\n\",\r\n    \"from tensorflow.keras.layers import LSTM\\n\",\r\n    \"from tensorflow.keras.models import Sequential\\n\",\r\n    \"import glob\\n\",\r\n    \"from numpy import inf\\n\",\r\n    \"from tensorflow.keras.layers import Bidirectional\\n\",\r\n    \"\\n\",\r\n    \"\\n\",\r\n    \"import numpy as np\\n\",\r\n    \"from tensorflow.keras.optimizers import RMSprop\\n\",\r\n    \"from tensorflow.keras.callbacks import EarlyStopping\\n\",\r\n    \"import os\\n\",\r\n    \"\\n\",\r\n    \"from sklearn.metrics import confusion_matrix, classification_report\\n\",\r\n    \"from sklearn.model_selection import train_test_split, StratifiedKFold\\n\",\r\n    \"\\n\",\r\n    \"from scipy.interpolate import interp1d\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 60,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"base_dir = \\\".\\\"\\n\",\r\n    \"dataset_dir = os.path.join(\\\"data\\\")\\n\",\r\n    \"test_dir = os.path.join(\\\"generated/data\\\")\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 3,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"FS = 100\\n\",\r\n    \"ALL_ACTIVITIES = [\\\"static\\\", \\\"standing\\\", \\\"walking\\\", \\\"falling\\\"]\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 4,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"def loadFromDat(inputFile, windowSize = FS, step = 50):\\n\",\r\n    \"#     print(int((csi_data.nsamples-1)*(100/average_sample_rate)+1))\\n\",\r\n    \"    \\n\",\r\n    \"    csi_data = read_pcap(inputFile)\\n\",\r\n    \"    csi = csi_data.csi\\n\",\r\n    \"    \\n\",\r\n    \"    \\n\",\r\n    \"    first_timestamp = float(csi_data.timestamps[0])\\n\",\r\n    \"    last_timestamp = float(csi_data.timestamps[-1])\\n\",\r\n    \"    final_timestamp = last_timestamp-first_timestamp\\n\",\r\n    \"    average_sample_rate = csi_data.nsamples/final_timestamp\\n\",\r\n    \"    \\n\",\r\n    \"    interp_func=interp1d(csi_data.timestamps, csi_data.csi, kind='linear', axis=0, fill_value=\\\"extrapolate\\\")\\n\",\r\n    \"    t_new = np.linspace(first_timestamp, last_timestamp, (csi_data.nsamples-1)*int((100/average_sample_rate)+1))\\n\",\r\n    \"    csi_interp = interp_func(t_new)\\n\",\r\n    \"    csi=csi_interp\\n\",\r\n    \"    \\n\",\r\n    \"    csi = db(np.abs(csi))\\n\",\r\n    \"    finalData = csi[:, :, 0]\\n\",\r\n    \"    finalData = np.transpose(finalData)\\n\",\r\n    \"    \\n\",\r\n    \"    new_average_sample_rate = len(csi_interp)/final_timestamp\\n\",\r\n    \"    \\n\",\r\n    \"    if new_average_sample_rate > FS:\\n\",\r\n    \"        downsample_factor = int(new_average_sample_rate/FS)\\n\",\r\n    \"        csi = csi[::downsample_factor]\\n\",\r\n    \"    index = 0\\n\",\r\n    \"    positiveInput = []\\n\",\r\n    \"    \\n\",\r\n    \"    while index + windowSize <= csi.shape[0]:\\n\",\r\n    \"        curFeature = np.zeros((1, windowSize, 256))\\n\",\r\n    \"        curFeature[0] = csi[index:index+windowSize, :].reshape(100,256)\\n\",\r\n    \"        positiveInput.append(curFeature)\\n\",\r\n    \"        index += step\\n\",\r\n    \"    try:\\n\",\r\n    \"        positiveInput = np.concatenate(positiveInput, axis = 0)\\n\",\r\n    \"    except ValueError as e:\\n\",\r\n    \"        positiveInput = np.zeros((1, windowSize, 256))\\n\",\r\n    \"    positiveInput[positiveInput == -inf] = 0\\n\",\r\n    \"    \\n\",\r\n    \"    return positiveInput\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 39,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"def loadByActivityLabel(directory, activity, activities=ALL_ACTIVITIES, windowSize=FS, step = 50, downsample=1):\\n\",\r\n    \"    activity = activity.lower()\\n\",\r\n    \"    if activity not in activities:\\n\",\r\n    \"        print(\\\"invalid activity: \\\" + activity)\\n\",\r\n    \"    \\n\",\r\n    \"    dataPathPattern = os.path.join(directory,\\\"{}*.pcap\\\".format(activity))\\n\",\r\n    \"    inputFiles = sorted(glob.glob(dataPathPattern, recursive =True))\\n\",\r\n    \"    inputWindows = []\\n\",\r\n    \"    index = 0\\n\",\r\n    \"    for inputFile in inputFiles:\\n\",\r\n    \"        index += 1\\n\",\r\n    \"        csiOutput = loadFromDat(inputFile, windowSize = windowSize, step=step)\\n\",\r\n    \"        if csiOutput is not None:\\n\",\r\n    \"            inputWindows.append(csiOutput)\\n\",\r\n    \"    inputArray = np.concatenate(inputWindows, axis = 0)\\n\",\r\n    \"    outputLabels = np.zeros((inputArray.shape[0], len(activities)))\\n\",\r\n    \"    outputLabels[:, activities.index(activity)] = 1\\n\",\r\n    \"    return inputArray, outputLabels\\n\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 63,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"def loadDataForActivities(directory, activities=ALL_ACTIVITIES, windowSize=100, step=50, downsample=1):\\n\",\r\n    \"    x_all = []\\n\",\r\n    \"    y_all = []\\n\",\r\n    \"    for activity in activities:\\n\",\r\n    \"        print(activity)\\n\",\r\n    \"        inputArray, outputLabels = loadByActivityLabel(directory, activity, activities, windowSize=windowSize, step=step, downsample=downsample)\\n\",\r\n    \"        x_all.append(inputArray)\\n\",\r\n    \"        y_all.append(outputLabels)\\n\",\r\n    \"    x_all = np.concatenate(x_all, axis=0)\\n\",\r\n    \"    y_all = np.concatenate(y_all, axis=0)\\n\",\r\n    \"    return (x_all, y_all)\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 45,\r\n   \"metadata\": {},\r\n   \"outputs\": [\r\n    {\r\n     \"name\": \"stdout\",\r\n     \"output_type\": \"stream\",\r\n     \"text\": [\r\n      \"[[0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]\\n\",\r\n      \" [0. 1. 0. 0.]]\\n\"\r\n     ]\r\n    }\r\n   ],\r\n   \"source\": [\r\n    \"x_all, y_all = loadDataForActivities(dataset_dir, downsample=1)\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 8,\r\n   \"metadata\": {},\r\n   \"outputs\": [\r\n    {\r\n     \"data\": {\r\n      \"text/plain\": [\r\n       \"(array([[[75.82117487, 91.1968139 , 42.14419939, ..., 24.4870632 ,\\n\",\r\n       \"          23.97940009, 17.63427994],\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 25.13374666,\\n\",\r\n       \"          18.82639991, 23.98065317],\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 25.95279419,\\n\",\r\n       \"          15.27814445, 23.73498563],\\n\",\r\n       \"         ...,\\n\",\r\n       \"         [75.82117487, 91.18616539, 42.14419939, ..., 24.09829638,\\n\",\r\n       \"          20.2568525 , 20.38573453],\\n\",\r\n       \"         [75.82117487, 91.19448347, 42.14419939, ..., 27.89504509,\\n\",\r\n       \"          29.00928825, 22.21924811],\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 27.52979228,\\n\",\r\n       \"          27.65363008, 10.51237856]],\\n\",\r\n       \" \\n\",\r\n       \"        [[75.82117487, 91.1968139 , 42.14419939, ..., 14.76296322,\\n\",\r\n       \"          15.05162086, 15.90466465],\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 21.79406852,\\n\",\r\n       \"          12.90583814,  6.44155676],\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 22.47093636,\\n\",\r\n       \"          -1.78505337, 10.7315378 ],\\n\",\r\n       \"         ...,\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 16.13510665,\\n\",\r\n       \"          20.97791257, 18.88112592],\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 20.97930441,\\n\",\r\n       \"          24.99119238, 18.41497335],\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 15.92481179,\\n\",\r\n       \"          25.61219306, 22.83090038]],\\n\",\r\n       \" \\n\",\r\n       \"        [[75.82117487, 91.1968139 , 42.14419939, ..., 22.40417253,\\n\",\r\n       \"          23.77547445, 17.12401013],\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 18.0255944 ,\\n\",\r\n       \"          22.59137094, 14.78709788],\\n\",\r\n       \"         [75.82117487, 91.19142942, 42.14419939, ..., 25.93229568,\\n\",\r\n       \"          24.5171462 ,  8.95397592],\\n\",\r\n       \"         ...,\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 12.84427063,\\n\",\r\n       \"          26.3094485 , 14.45832885],\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 19.30709067,\\n\",\r\n       \"          26.58115924, 15.0053414 ],\\n\",\r\n       \"         [75.82117487, 91.1968139 , 42.14419939, ..., 23.59524859,\\n\",\r\n       \"          26.87178047, 15.72369611]],\\n\",\r\n       \" \\n\",\r\n       \"        ...,\\n\",\r\n       \" \\n\",\r\n       \"        [[75.82117487, 91.06631452, 42.14419939, ..., 14.62397998,\\n\",\r\n       \"           0.        , 16.98970004],\\n\",\r\n       \"         [75.82117487, 91.06631452, 42.14419939, ..., 11.41763098,\\n\",\r\n       \"           8.82807451, 13.86020512],\\n\",\r\n       \"         [75.82117487, 91.05845019, 42.14419939, ..., 16.0888489 ,\\n\",\r\n       \"          13.92731552,  9.29750567],\\n\",\r\n       \"         ...,\\n\",\r\n       \"         [75.82117487, 91.1020832 , 42.14419939, ..., 24.06610815,\\n\",\r\n       \"          19.79947997, 19.64413103],\\n\",\r\n       \"         [75.82117487, 91.11040668, 42.14419939, ..., 22.49767363,\\n\",\r\n       \"          19.77495005, 21.10800498],\\n\",\r\n       \"         [75.82117487, 91.12058766, 42.14419939, ..., 19.08228923,\\n\",\r\n       \"          20.53650674, 22.52644483]],\\n\",\r\n       \" \\n\",\r\n       \"        [[75.82117487, 91.10476487, 42.14419939, ..., 18.58359495,\\n\",\r\n       \"          18.8699314 , 17.50737479],\\n\",\r\n       \"         [75.82117487, 91.11235961, 42.14419939, ..., 17.76279596,\\n\",\r\n       \"          24.69241505, 18.66112548],\\n\",\r\n       \"         [75.82117487, 91.11766573, 42.14419939, ..., 15.38406491,\\n\",\r\n       \"          26.71586305, 18.47830241],\\n\",\r\n       \"         ...,\\n\",\r\n       \"         [75.82117487, 91.18259482, 42.14419939, ..., 21.46083444,\\n\",\r\n       \"          17.29662132, 16.68904269],\\n\",\r\n       \"         [75.82117487, 91.17507637, 42.14419939, ..., 20.88748599,\\n\",\r\n       \"          12.40242633, 12.88640925],\\n\",\r\n       \"         [76.09022325, 91.18536947, 42.14419939, ..., 21.32912012,\\n\",\r\n       \"          16.39198411, 11.47134808]],\\n\",\r\n       \" \\n\",\r\n       \"        [[75.82117487, 91.14304765, 42.14419939, ..., 16.75028103,\\n\",\r\n       \"          19.84911031, 16.46484284],\\n\",\r\n       \"         [75.82117487, 91.1657134 , 42.14419939, ..., 27.06974109,\\n\",\r\n       \"          23.24266076, 13.87516862],\\n\",\r\n       \"         [75.82117487, 91.18858164, 42.14419939, ..., 31.66398239,\\n\",\r\n       \"          26.59314436, 20.76298614],\\n\",\r\n       \"         ...,\\n\",\r\n       \"         [75.82117487, 91.05928503, 42.14419939, ...,  7.99575711,\\n\",\r\n       \"          14.8753149 ,  6.89991384],\\n\",\r\n       \"         [75.82117487, 91.07582427, 42.14419939, ...,  4.90110117,\\n\",\r\n       \"          14.19624628, 13.01925974],\\n\",\r\n       \"         [75.82117487, 91.09233784, 42.14419939, ..., 10.04711236,\\n\",\r\n       \"          15.46241316, 16.42093069]]]),\\n\",\r\n       \" array([[1., 0., 0., 0.],\\n\",\r\n       \"        [1., 0., 0., 0.],\\n\",\r\n       \"        [1., 0., 0., 0.],\\n\",\r\n       \"        ...,\\n\",\r\n       \"        [0., 0., 0., 1.],\\n\",\r\n       \"        [0., 0., 0., 1.],\\n\",\r\n       \"        [0., 0., 0., 1.]]))\"\r\n      ]\r\n     },\r\n     \"execution_count\": 8,\r\n     \"metadata\": {},\r\n     \"output_type\": \"execute_result\"\r\n    }\r\n   ],\r\n   \"source\": [\r\n    \"loadDataForActivities(dataset_dir, downsample=1)\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 36,\r\n   \"metadata\": {},\r\n   \"outputs\": [\r\n    {\r\n     \"name\": \"stdout\",\r\n     \"output_type\": \"stream\",\r\n     \"text\": [\r\n      \"256\\n\"\r\n     ]\r\n    }\r\n   ],\r\n   \"source\": [\r\n    \"x_train, x_val, y_train, y_val = train_test_split(x_all, y_all, stratify=y_all, test_size = 0.3, random_state=42)\\n\",\r\n    \"print(len(x_val[0][3]))\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 10,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"batch_size = 256\\n\",\r\n    \"epochs = 100\\n\",\r\n    \"\\n\",\r\n    \"f1s = []\\n\",\r\n    \"confs = []\\n\",\r\n    \"y_val_total = np.array([])\\n\",\r\n    \"y_pred_total = np.array([])\\n\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 11,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"model = Sequential()\\n\",\r\n    \"model.add(Conv1D(filters=128, kernel_size=5, activation='relu', strides=1))\\n\",\r\n    \"model.add(MaxPooling1D(pool_size=4))\\n\",\r\n    \"# model.add(Conv1D(filters=128, kernel_size=5, activation='relu'))\\n\",\r\n    \"# model.add(MaxPooling1D(pool_size=4))\\n\",\r\n    \"model.add(Bidirectional(LSTM(units=200, return_sequences=False)))\\n\",\r\n    \"# model.add(Bidirectional(LSTM(units=200, return_sequences=False)))\\n\",\r\n    \"model.add(Flatten())\\n\",\r\n    \"model.add(Dense(4, activation='softmax'))\\n\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 12,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"model.compile(optimizer=RMSprop(learning_rate=0.0001), loss=\\\"categorical_crossentropy\\\", metrics=[\\\"accuracy\\\"])\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 13,\r\n   \"metadata\": {},\r\n   \"outputs\": [\r\n    {\r\n     \"name\": \"stdout\",\r\n     \"output_type\": \"stream\",\r\n     \"text\": [\r\n      \"Epoch 1/100\\n\",\r\n      \"5/5 [==============================] - 16s 1s/step - loss: 1.3261 - accuracy: 0.4058 - val_loss: 1.0839 - val_accuracy: 0.6139\\n\",\r\n      \"Epoch 2/100\\n\",\r\n      \"5/5 [==============================] - 3s 620ms/step - loss: 1.0489 - accuracy: 0.6239 - val_loss: 1.0341 - val_accuracy: 0.4713\\n\",\r\n      \"Epoch 3/100\\n\",\r\n      \"5/5 [==============================] - 3s 625ms/step - loss: 0.9559 - accuracy: 0.6290 - val_loss: 0.9498 - val_accuracy: 0.5901\\n\",\r\n      \"Epoch 4/100\\n\",\r\n      \"5/5 [==============================] - 3s 595ms/step - loss: 1.0129 - accuracy: 0.5671 - val_loss: 0.9298 - val_accuracy: 0.6119\\n\",\r\n      \"Epoch 5/100\\n\",\r\n      \"5/5 [==============================] - 3s 634ms/step - loss: 0.8274 - accuracy: 0.7224 - val_loss: 0.8356 - val_accuracy: 0.7228\\n\",\r\n      \"Epoch 6/100\\n\",\r\n      \"5/5 [==============================] - 3s 591ms/step - loss: 0.7992 - accuracy: 0.7088 - val_loss: 0.8467 - val_accuracy: 0.6673\\n\",\r\n      \"Epoch 7/100\\n\",\r\n      \"5/5 [==============================] - 3s 666ms/step - loss: 0.7573 - accuracy: 0.7767 - val_loss: 0.7039 - val_accuracy: 0.8198\\n\",\r\n      \"Epoch 8/100\\n\",\r\n      \"5/5 [==============================] - 3s 579ms/step - loss: 0.6777 - accuracy: 0.7980 - val_loss: 0.9544 - val_accuracy: 0.5406\\n\",\r\n      \"Epoch 9/100\\n\",\r\n      \"5/5 [==============================] - 3s 550ms/step - loss: 0.7556 - accuracy: 0.7250 - val_loss: 0.6257 - val_accuracy: 0.7941\\n\",\r\n      \"Epoch 10/100\\n\",\r\n      \"5/5 [==============================] - 3s 591ms/step - loss: 0.6705 - accuracy: 0.7419 - val_loss: 0.6433 - val_accuracy: 0.8277\\n\",\r\n      \"Epoch 11/100\\n\",\r\n      \"5/5 [==============================] - 3s 549ms/step - loss: 0.6501 - accuracy: 0.8065 - val_loss: 0.6452 - val_accuracy: 0.7267\\n\",\r\n      \"Epoch 12/100\\n\",\r\n      \"5/5 [==============================] - 3s 519ms/step - loss: 0.6123 - accuracy: 0.7521 - val_loss: 0.5842 - val_accuracy: 0.8218\\n\",\r\n      \"Epoch 13/100\\n\",\r\n      \"5/5 [==============================] - 3s 579ms/step - loss: 0.5408 - accuracy: 0.8081 - val_loss: 0.7025 - val_accuracy: 0.7960\\n\",\r\n      \"Epoch 14/100\\n\",\r\n      \"5/5 [==============================] - 3s 563ms/step - loss: 0.5586 - accuracy: 0.8430 - val_loss: 0.5248 - val_accuracy: 0.8594\\n\",\r\n      \"Epoch 15/100\\n\",\r\n      \"5/5 [==============================] - 3s 576ms/step - loss: 0.6341 - accuracy: 0.7462 - val_loss: 0.8549 - val_accuracy: 0.6653\\n\",\r\n      \"Epoch 16/100\\n\",\r\n      \"5/5 [==============================] - 3s 583ms/step - loss: 0.5891 - accuracy: 0.8014 - val_loss: 0.4933 - val_accuracy: 0.8535\\n\",\r\n      \"Epoch 17/100\\n\",\r\n      \"5/5 [==============================] - 3s 595ms/step - loss: 0.5424 - accuracy: 0.7810 - val_loss: 0.7013 - val_accuracy: 0.7050\\n\",\r\n      \"Epoch 18/100\\n\",\r\n      \"5/5 [==============================] - 3s 580ms/step - loss: 0.4844 - accuracy: 0.8582 - val_loss: 0.4938 - val_accuracy: 0.8000\\n\",\r\n      \"Epoch 19/100\\n\",\r\n      \"5/5 [==============================] - 3s 568ms/step - loss: 0.5382 - accuracy: 0.7479 - val_loss: 0.4433 - val_accuracy: 0.8376\\n\",\r\n      \"Epoch 20/100\\n\",\r\n      \"5/5 [==============================] - 3s 573ms/step - loss: 0.3990 - accuracy: 0.8803 - val_loss: 0.7981 - val_accuracy: 0.7129\\n\",\r\n      \"Epoch 21/100\\n\",\r\n      \"5/5 [==============================] - 3s 595ms/step - loss: 0.5747 - accuracy: 0.7869 - val_loss: 0.4599 - val_accuracy: 0.8673\\n\",\r\n      \"Epoch 22/100\\n\",\r\n      \"5/5 [==============================] - 3s 598ms/step - loss: 0.4858 - accuracy: 0.8124 - val_loss: 0.4811 - val_accuracy: 0.8059\\n\",\r\n      \"Epoch 23/100\\n\",\r\n      \"5/5 [==============================] - 3s 563ms/step - loss: 0.4811 - accuracy: 0.7835 - val_loss: 0.5155 - val_accuracy: 0.8614\\n\",\r\n      \"Epoch 24/100\\n\",\r\n      \"5/5 [==============================] - 3s 577ms/step - loss: 0.4171 - accuracy: 0.8710 - val_loss: 0.5192 - val_accuracy: 0.8040\\n\",\r\n      \"Epoch 25/100\\n\",\r\n      \"5/5 [==============================] - 3s 595ms/step - loss: 0.4843 - accuracy: 0.7674 - val_loss: 0.5273 - val_accuracy: 0.7545\\n\",\r\n      \"Epoch 26/100\\n\",\r\n      \"5/5 [==============================] - 3s 580ms/step - loss: 0.3947 - accuracy: 0.8820 - val_loss: 0.3479 - val_accuracy: 0.9426\\n\",\r\n      \"Epoch 27/100\\n\",\r\n      \"5/5 [==============================] - 3s 580ms/step - loss: 0.5354 - accuracy: 0.7742 - val_loss: 0.6245 - val_accuracy: 0.7188\\n\",\r\n      \"Epoch 28/100\\n\",\r\n      \"5/5 [==============================] - 3s 567ms/step - loss: 0.4351 - accuracy: 0.8625 - val_loss: 0.5998 - val_accuracy: 0.7723\\n\",\r\n      \"Epoch 29/100\\n\",\r\n      \"5/5 [==============================] - 3s 561ms/step - loss: 0.5012 - accuracy: 0.7564 - val_loss: 0.4676 - val_accuracy: 0.8356\\n\",\r\n      \"Epoch 30/100\\n\",\r\n      \"5/5 [==============================] - 3s 599ms/step - loss: 0.4232 - accuracy: 0.8591 - val_loss: 0.4966 - val_accuracy: 0.8000\\n\",\r\n      \"Epoch 31/100\\n\",\r\n      \"5/5 [==============================] - 3s 567ms/step - loss: 0.4542 - accuracy: 0.7869 - val_loss: 0.4389 - val_accuracy: 0.8554\\n\",\r\n      \"Epoch 32/100\\n\",\r\n      \"5/5 [==============================] - 3s 560ms/step - loss: 0.4085 - accuracy: 0.8404 - val_loss: 0.6202 - val_accuracy: 0.7802\\n\",\r\n      \"Epoch 33/100\\n\",\r\n      \"5/5 [==============================] - 3s 557ms/step - loss: 0.4021 - accuracy: 0.8735 - val_loss: 0.3409 - val_accuracy: 0.9406\\n\",\r\n      \"Epoch 34/100\\n\",\r\n      \"5/5 [==============================] - 3s 571ms/step - loss: 0.4993 - accuracy: 0.7954 - val_loss: 0.4500 - val_accuracy: 0.8020\\n\",\r\n      \"Epoch 35/100\\n\",\r\n      \"5/5 [==============================] - 3s 592ms/step - loss: 0.3600 - accuracy: 0.8718 - val_loss: 0.4254 - val_accuracy: 0.8673\\n\",\r\n      \"Epoch 36/100\\n\",\r\n      \"5/5 [==============================] - 3s 551ms/step - loss: 0.4614 - accuracy: 0.7912 - val_loss: 0.5500 - val_accuracy: 0.8099\\n\",\r\n      \"Epoch 37/100\\n\",\r\n      \"5/5 [==============================] - 3s 556ms/step - loss: 0.3638 - accuracy: 0.8964 - val_loss: 0.4088 - val_accuracy: 0.8238\\n\",\r\n      \"Epoch 38/100\\n\",\r\n      \"5/5 [==============================] - 3s 578ms/step - loss: 0.4473 - accuracy: 0.8192 - val_loss: 0.4280 - val_accuracy: 0.8079\\n\",\r\n      \"Epoch 39/100\\n\",\r\n      \"5/5 [==============================] - 3s 559ms/step - loss: 0.3337 - accuracy: 0.8905 - val_loss: 0.4231 - val_accuracy: 0.8059\\n\",\r\n      \"Epoch 40/100\\n\",\r\n      \"5/5 [==============================] - 3s 582ms/step - loss: 0.4318 - accuracy: 0.8200 - val_loss: 0.5316 - val_accuracy: 0.7941\\n\",\r\n      \"Epoch 41/100\\n\",\r\n      \"5/5 [==============================] - 3s 568ms/step - loss: 0.3985 - accuracy: 0.8616 - val_loss: 0.2979 - val_accuracy: 0.9564\\n\",\r\n      \"Epoch 42/100\\n\",\r\n      \"5/5 [==============================] - 3s 568ms/step - loss: 0.4665 - accuracy: 0.7903 - val_loss: 0.3387 - val_accuracy: 0.8257\\n\",\r\n      \"Epoch 43/100\\n\",\r\n      \"5/5 [==============================] - 3s 581ms/step - loss: 0.4084 - accuracy: 0.8065 - val_loss: 0.4446 - val_accuracy: 0.7901\\n\",\r\n      \"Epoch 44/100\\n\",\r\n      \"5/5 [==============================] - 3s 575ms/step - loss: 0.3575 - accuracy: 0.8786 - val_loss: 0.3451 - val_accuracy: 0.9406\\n\",\r\n      \"Epoch 45/100\\n\",\r\n      \"5/5 [==============================] - 3s 590ms/step - loss: 0.3964 - accuracy: 0.8370 - val_loss: 0.4042 - val_accuracy: 0.8079\\n\",\r\n      \"Epoch 46/100\\n\",\r\n      \"5/5 [==============================] - 3s 577ms/step - loss: 0.3731 - accuracy: 0.8404 - val_loss: 0.4147 - val_accuracy: 0.8891\\n\",\r\n      \"Epoch 47/100\\n\",\r\n      \"5/5 [==============================] - 3s 593ms/step - loss: 0.3310 - accuracy: 0.8964 - val_loss: 0.5967 - val_accuracy: 0.7842\\n\",\r\n      \"Epoch 48/100\\n\",\r\n      \"5/5 [==============================] - 3s 582ms/step - loss: 0.4290 - accuracy: 0.8192 - val_loss: 0.3841 - val_accuracy: 0.8356\\n\",\r\n      \"Epoch 49/100\\n\",\r\n      \"5/5 [==============================] - 3s 644ms/step - loss: 0.3367 - accuracy: 0.8540 - val_loss: 0.7162 - val_accuracy: 0.7485\\n\",\r\n      \"Epoch 50/100\\n\",\r\n      \"5/5 [==============================] - 3s 524ms/step - loss: 0.3598 - accuracy: 0.8973 - val_loss: 0.2948 - val_accuracy: 0.9208\\n\",\r\n      \"Epoch 51/100\\n\",\r\n      \"5/5 [==============================] - 3s 552ms/step - loss: 0.4530 - accuracy: 0.8065 - val_loss: 0.4255 - val_accuracy: 0.8158\\n\",\r\n      \"Epoch 52/100\\n\",\r\n      \"5/5 [==============================] - 3s 557ms/step - loss: 0.3405 - accuracy: 0.8769 - val_loss: 0.3711 - val_accuracy: 0.8950\\n\",\r\n      \"Epoch 53/100\\n\",\r\n      \"5/5 [==============================] - 3s 573ms/step - loss: 0.3905 - accuracy: 0.8506 - val_loss: 0.4036 - val_accuracy: 0.8099\\n\",\r\n      \"Epoch 54/100\\n\",\r\n      \"5/5 [==============================] - 3s 599ms/step - loss: 0.3952 - accuracy: 0.8141 - val_loss: 0.3290 - val_accuracy: 0.8931\\n\",\r\n      \"Epoch 55/100\\n\",\r\n      \"5/5 [==============================] - 3s 552ms/step - loss: 0.3115 - accuracy: 0.8871 - val_loss: 0.4638 - val_accuracy: 0.7960\\n\",\r\n      \"Epoch 56/100\\n\",\r\n      \"5/5 [==============================] - 3s 587ms/step - loss: 0.3811 - accuracy: 0.8285 - val_loss: 0.3626 - val_accuracy: 0.9168\\n\",\r\n      \"Epoch 57/100\\n\",\r\n      \"5/5 [==============================] - 3s 587ms/step - loss: 0.3472 - accuracy: 0.8718 - val_loss: 0.3688 - val_accuracy: 0.8198\\n\",\r\n      \"Epoch 58/100\\n\",\r\n      \"5/5 [==============================] - 3s 571ms/step - loss: 0.3489 - accuracy: 0.8497 - val_loss: 0.3794 - val_accuracy: 0.9129\\n\"\r\n     ]\r\n    },\r\n    {\r\n     \"name\": \"stdout\",\r\n     \"output_type\": \"stream\",\r\n     \"text\": [\r\n      \"Epoch 59/100\\n\",\r\n      \"5/5 [==============================] - 3s 566ms/step - loss: 0.3715 - accuracy: 0.8472 - val_loss: 0.3226 - val_accuracy: 0.8317\\n\",\r\n      \"Epoch 60/100\\n\",\r\n      \"5/5 [==============================] - 3s 568ms/step - loss: 0.3657 - accuracy: 0.8328 - val_loss: 0.3826 - val_accuracy: 0.8376\\n\",\r\n      \"Epoch 61/100\\n\",\r\n      \"5/5 [==============================] - 3s 541ms/step - loss: 0.3934 - accuracy: 0.8514 - val_loss: 0.3469 - val_accuracy: 0.8297\\n\",\r\n      \"Epoch 62/100\\n\",\r\n      \"5/5 [==============================] - 3s 583ms/step - loss: 0.3708 - accuracy: 0.8217 - val_loss: 0.3406 - val_accuracy: 0.8515\\n\",\r\n      \"Epoch 63/100\\n\",\r\n      \"5/5 [==============================] - 3s 599ms/step - loss: 0.2464 - accuracy: 0.9372 - val_loss: 0.2637 - val_accuracy: 0.8931\\n\",\r\n      \"Epoch 64/100\\n\",\r\n      \"5/5 [==============================] - 3s 552ms/step - loss: 0.4109 - accuracy: 0.8158 - val_loss: 0.3545 - val_accuracy: 0.8752\\n\",\r\n      \"Epoch 65/100\\n\",\r\n      \"5/5 [==============================] - 3s 569ms/step - loss: 0.3498 - accuracy: 0.8633 - val_loss: 0.2701 - val_accuracy: 0.9129\\n\",\r\n      \"Epoch 66/100\\n\",\r\n      \"5/5 [==============================] - 3s 581ms/step - loss: 0.3021 - accuracy: 0.8803 - val_loss: 0.3468 - val_accuracy: 0.9406\\n\",\r\n      \"Epoch 67/100\\n\",\r\n      \"5/5 [==============================] - 3s 585ms/step - loss: 0.3679 - accuracy: 0.8480 - val_loss: 0.2989 - val_accuracy: 0.8396\\n\",\r\n      \"Epoch 68/100\\n\",\r\n      \"5/5 [==============================] - 3s 622ms/step - loss: 0.3462 - accuracy: 0.8277 - val_loss: 0.3221 - val_accuracy: 0.9168\\n\",\r\n      \"Epoch 69/100\\n\",\r\n      \"5/5 [==============================] - 3s 602ms/step - loss: 0.2940 - accuracy: 0.9092 - val_loss: 0.3706 - val_accuracy: 0.8198\\n\",\r\n      \"Epoch 70/100\\n\",\r\n      \"5/5 [==============================] - 3s 598ms/step - loss: 0.3821 - accuracy: 0.8065 - val_loss: 0.2764 - val_accuracy: 0.9109\\n\",\r\n      \"Epoch 71/100\\n\",\r\n      \"5/5 [==============================] - 3s 593ms/step - loss: 0.2156 - accuracy: 0.9380 - val_loss: 0.4724 - val_accuracy: 0.7050\\n\",\r\n      \"Epoch 72/100\\n\",\r\n      \"5/5 [==============================] - 3s 587ms/step - loss: 0.4367 - accuracy: 0.8370 - val_loss: 0.3803 - val_accuracy: 0.8099\\n\",\r\n      \"Epoch 73/100\\n\",\r\n      \"5/5 [==============================] - 3s 573ms/step - loss: 0.3694 - accuracy: 0.7954 - val_loss: 0.3626 - val_accuracy: 0.8713\\n\",\r\n      \"Epoch 74/100\\n\",\r\n      \"5/5 [==============================] - 3s 586ms/step - loss: 0.3203 - accuracy: 0.8744 - val_loss: 0.3975 - val_accuracy: 0.8158\\n\",\r\n      \"Epoch 75/100\\n\",\r\n      \"5/5 [==============================] - 3s 558ms/step - loss: 0.3506 - accuracy: 0.8311 - val_loss: 0.2818 - val_accuracy: 0.8713\\n\",\r\n      \"Epoch 76/100\\n\",\r\n      \"5/5 [==============================] - 3s 600ms/step - loss: 0.2410 - accuracy: 0.9219 - val_loss: 0.3225 - val_accuracy: 0.8752\\n\",\r\n      \"Epoch 77/100\\n\",\r\n      \"5/5 [==============================] - 3s 585ms/step - loss: 0.3287 - accuracy: 0.8693 - val_loss: 0.4295 - val_accuracy: 0.8139\\n\",\r\n      \"Epoch 78/100\\n\",\r\n      \"5/5 [==============================] - 3s 563ms/step - loss: 0.3457 - accuracy: 0.8463 - val_loss: 0.3610 - val_accuracy: 0.9188\\n\",\r\n      \"Epoch 79/100\\n\",\r\n      \"5/5 [==============================] - 3s 589ms/step - loss: 0.3341 - accuracy: 0.8803 - val_loss: 0.3460 - val_accuracy: 0.8218\\n\",\r\n      \"Epoch 80/100\\n\",\r\n      \"5/5 [==============================] - 3s 572ms/step - loss: 0.3494 - accuracy: 0.8141 - val_loss: 0.3049 - val_accuracy: 0.9050\\n\",\r\n      \"Epoch 81/100\\n\",\r\n      \"5/5 [==============================] - 3s 612ms/step - loss: 0.3435 - accuracy: 0.8642 - val_loss: 0.3479 - val_accuracy: 0.8178\\n\",\r\n      \"Epoch 82/100\\n\",\r\n      \"5/5 [==============================] - 3s 609ms/step - loss: 0.2832 - accuracy: 0.8829 - val_loss: 0.2300 - val_accuracy: 0.9624\\n\",\r\n      \"Epoch 83/100\\n\",\r\n      \"5/5 [==============================] - 3s 544ms/step - loss: 0.3291 - accuracy: 0.8633 - val_loss: 0.2479 - val_accuracy: 0.8832\\n\",\r\n      \"Epoch 84/100\\n\",\r\n      \"5/5 [==============================] - 3s 586ms/step - loss: 0.3164 - accuracy: 0.8404 - val_loss: 0.3103 - val_accuracy: 0.8772\\n\",\r\n      \"Epoch 85/100\\n\",\r\n      \"5/5 [==============================] - 3s 567ms/step - loss: 0.2225 - accuracy: 0.9465 - val_loss: 0.2069 - val_accuracy: 0.9485\\n\",\r\n      \"Epoch 86/100\\n\",\r\n      \"5/5 [==============================] - 3s 583ms/step - loss: 0.3717 - accuracy: 0.8294 - val_loss: 0.3413 - val_accuracy: 0.8812\\n\",\r\n      \"Epoch 87/100\\n\",\r\n      \"5/5 [==============================] - 3s 575ms/step - loss: 0.2532 - accuracy: 0.9363 - val_loss: 0.2501 - val_accuracy: 0.8832\\n\",\r\n      \"Epoch 88/100\\n\",\r\n      \"5/5 [==============================] - 3s 545ms/step - loss: 0.4037 - accuracy: 0.7997 - val_loss: 0.3707 - val_accuracy: 0.8455\\n\",\r\n      \"Epoch 89/100\\n\",\r\n      \"5/5 [==============================] - 3s 582ms/step - loss: 0.3203 - accuracy: 0.8778 - val_loss: 0.3789 - val_accuracy: 0.8139\\n\",\r\n      \"Epoch 90/100\\n\",\r\n      \"5/5 [==============================] - 3s 605ms/step - loss: 0.3006 - accuracy: 0.8803 - val_loss: 0.2747 - val_accuracy: 0.9584\\n\",\r\n      \"Epoch 91/100\\n\",\r\n      \"5/5 [==============================] - 3s 544ms/step - loss: 0.3265 - accuracy: 0.8650 - val_loss: 0.3401 - val_accuracy: 0.8297\\n\",\r\n      \"Epoch 92/100\\n\",\r\n      \"5/5 [==============================] - 3s 570ms/step - loss: 0.2836 - accuracy: 0.8710 - val_loss: 0.2369 - val_accuracy: 0.9584\\n\",\r\n      \"Epoch 93/100\\n\",\r\n      \"5/5 [==============================] - 3s 533ms/step - loss: 0.3412 - accuracy: 0.8514 - val_loss: 0.2710 - val_accuracy: 0.8733\\n\",\r\n      \"Epoch 94/100\\n\",\r\n      \"5/5 [==============================] - 3s 526ms/step - loss: 0.2272 - accuracy: 0.9261 - val_loss: 0.2496 - val_accuracy: 0.9525\\n\",\r\n      \"Epoch 95/100\\n\",\r\n      \"5/5 [==============================] - 3s 603ms/step - loss: 0.3490 - accuracy: 0.8531 - val_loss: 0.2772 - val_accuracy: 0.8653\\n\",\r\n      \"Epoch 96/100\\n\",\r\n      \"5/5 [==============================] - 3s 568ms/step - loss: 0.2973 - accuracy: 0.8684 - val_loss: 0.2707 - val_accuracy: 0.9267\\n\",\r\n      \"Epoch 97/100\\n\",\r\n      \"5/5 [==============================] - 3s 597ms/step - loss: 0.2514 - accuracy: 0.8964 - val_loss: 0.6006 - val_accuracy: 0.8020\\n\",\r\n      \"Epoch 98/100\\n\",\r\n      \"5/5 [==============================] - 3s 591ms/step - loss: 0.3247 - accuracy: 0.8990 - val_loss: 0.2606 - val_accuracy: 0.9347\\n\",\r\n      \"Epoch 99/100\\n\",\r\n      \"5/5 [==============================] - 3s 566ms/step - loss: 0.2829 - accuracy: 0.8862 - val_loss: 0.4022 - val_accuracy: 0.8119\\n\",\r\n      \"Epoch 100/100\\n\",\r\n      \"5/5 [==============================] - 3s 594ms/step - loss: 0.2882 - accuracy: 0.8846 - val_loss: 0.2475 - val_accuracy: 0.9465\\n\"\r\n     ]\r\n    },\r\n    {\r\n     \"data\": {\r\n      \"text/plain\": [\r\n       \"<keras.callbacks.History at 0x2be864ea230>\"\r\n      ]\r\n     },\r\n     \"execution_count\": 13,\r\n     \"metadata\": {},\r\n     \"output_type\": \"execute_result\"\r\n    }\r\n   ],\r\n   \"source\": [\r\n    \"model.fit(x_train, y_train, batch_size=256, epochs=100, shuffle=False, validation_data=(x_val, y_val))\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 59,\r\n   \"metadata\": {},\r\n   \"outputs\": [\r\n    {\r\n     \"name\": \"stdout\",\r\n     \"output_type\": \"stream\",\r\n     \"text\": [\r\n      \"16/16 [==============================] - 1s 41ms/step\\n\",\r\n      \"256\\n\"\r\n     ]\r\n    }\r\n   ],\r\n   \"source\": [\r\n    \"y_pred = model.predict(x_val)\\n\",\r\n    \"print(len(x_val[50][99]))\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 15,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"y_val_single = np.argmax(y_val, axis=1)\\n\",\r\n    \"y_pred_single = np.argmax(y_pred, axis=1)\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 17,\r\n   \"metadata\": {},\r\n   \"outputs\": [\r\n    {\r\n     \"name\": \"stdout\",\r\n     \"output_type\": \"stream\",\r\n     \"text\": [\r\n      \"[[161   0   3   0]\\n\",\r\n      \" [  0  70  16   0]\\n\",\r\n      \" [  5   3 158   0]\\n\",\r\n      \" [  0   0   0  89]]\\n\",\r\n      \"              precision    recall  f1-score   support\\n\",\r\n      \"\\n\",\r\n      \"      static       0.97      0.98      0.98       164\\n\",\r\n      \"    standing       0.96      0.81      0.88        86\\n\",\r\n      \"     walking       0.89      0.95      0.92       166\\n\",\r\n      \"     falling       1.00      1.00      1.00        89\\n\",\r\n      \"\\n\",\r\n      \"    accuracy                           0.95       505\\n\",\r\n      \"   macro avg       0.96      0.94      0.94       505\\n\",\r\n      \"weighted avg       0.95      0.95      0.95       505\\n\",\r\n      \"\\n\"\r\n     ]\r\n    }\r\n   ],\r\n   \"source\": [\r\n    \"print(confusion_matrix(y_val_single, y_pred_single))\\n\",\r\n    \"print(classification_report(y_val_single, y_pred_single, target_names=[\\\"static\\\", \\\"standing\\\", \\\"walking\\\", \\\"falling\\\"]))\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": 18,\r\n   \"metadata\": {},\r\n   \"outputs\": [],\r\n   \"source\": [\r\n    \"model.save(\\\"best_network.h5\\\")\"\r\n   ]\r\n  },\r\n  {\r\n   \"cell_type\": \"code\",\r\n   \"execution_count\": null,\r\n   \"metadata\": {},\r\n   \"outputs\": [\r\n    {\r\n     \"ename\": \"FileNotFoundError\",\r\n     \"evalue\": \"[WinError 3] The system cannot find the path specified: './generated/data/falling.pcap'\",\r\n     \"traceback\": [\r\n      \"\\u001b[1;31m---------------------------------------------------------------------------\\u001b[0m\",\r\n      \"\\u001b[1;31mFileNotFoundError\\u001b[0m                         Traceback (most recent call last)\",\r\n      \"Cell \\u001b[1;32mIn [66], line 1\\u001b[0m\\n\\u001b[1;32m----> 1\\u001b[0m x_all \\u001b[38;5;241m=\\u001b[39m loadFromDat(\\u001b[38;5;124mf\\u001b[39m\\u001b[38;5;124m\\\"\\u001b[39m\\u001b[38;5;124m./\\u001b[39m\\u001b[38;5;132;01m{\\u001b[39;00mtest_dir\\u001b[38;5;132;01m}\\u001b[39;00m\\u001b[38;5;124m/falling.pcap\\u001b[39m\\u001b[38;5;124m\\\"\\u001b[39m)\\n\",\r\n      \"Cell \\u001b[1;32mIn [4], line 4\\u001b[0m, in \\u001b[0;36mloadFromDat\\u001b[1;34m(inputFile, windowSize, step)\\u001b[0m\\n\\u001b[0;32m      1\\u001b[0m \\u001b[38;5;28;01mdef\\u001b[39;00m \\u001b[38;5;21mloadFromDat\\u001b[39m(inputFile, windowSize \\u001b[38;5;241m=\\u001b[39m FS, step \\u001b[38;5;241m=\\u001b[39m \\u001b[38;5;241m50\\u001b[39m):\\n\\u001b[0;32m      2\\u001b[0m \\u001b[38;5;66;03m#     print(int((csi_data.nsamples-1)*(100/average_sample_rate)+1))\\u001b[39;00m\\n\\u001b[1;32m----> 4\\u001b[0m     csi_data \\u001b[38;5;241m=\\u001b[39m \\u001b[43mread_pcap\\u001b[49m\\u001b[43m(\\u001b[49m\\u001b[43minputFile\\u001b[49m\\u001b[43m)\\u001b[49m\\n\\u001b[0;32m      5\\u001b[0m     csi \\u001b[38;5;241m=\\u001b[39m csi_data\\u001b[38;5;241m.\\u001b[39mcsi\\n\\u001b[0;32m      8\\u001b[0m     first_timestamp \\u001b[38;5;241m=\\u001b[39m \\u001b[38;5;28mfloat\\u001b[39m(csi_data\\u001b[38;5;241m.\\u001b[39mtimestamps[\\u001b[38;5;241m0\\u001b[39m])\\n\",\r\n      \"File \\u001b[1;32m~\\\\PycharmProjects\\\\FYP\\\\trial1\\\\decoders\\\\interleaved.py:231\\u001b[0m, in \\u001b[0;36mread_pcap\\u001b[1;34m(pcap_filepath, bandwidth, nsamples_max)\\u001b[0m\\n\\u001b[0;32m    220\\u001b[0m \\u001b[38;5;28;01mdef\\u001b[39;00m \\u001b[38;5;21mread_pcap\\u001b[39m(pcap_filepath, bandwidth\\u001b[38;5;241m=\\u001b[39m\\u001b[38;5;241m0\\u001b[39m, nsamples_max\\u001b[38;5;241m=\\u001b[39m\\u001b[38;5;241m0\\u001b[39m):\\n\\u001b[0;32m    221\\u001b[0m     \\u001b[38;5;124;03m'''\\u001b[39;00m\\n\\u001b[0;32m    222\\u001b[0m \\u001b[38;5;124;03m        Reads CSI samples from\\u001b[39;00m\\n\\u001b[0;32m    223\\u001b[0m \\u001b[38;5;124;03m        a pcap file. A SampleSet\\u001b[39;00m\\n\\u001b[1;32m   (...)\\u001b[0m\\n\\u001b[0;32m    228\\u001b[0m \\u001b[38;5;124;03m        default, but you can also set them explicitly.\\u001b[39;00m\\n\\u001b[0;32m    229\\u001b[0m \\u001b[38;5;124;03m    '''\\u001b[39;00m\\n\\u001b[1;32m--> 231\\u001b[0m     pcap_filesize \\u001b[38;5;241m=\\u001b[39m \\u001b[43mos\\u001b[49m\\u001b[38;5;241;43m.\\u001b[39;49m\\u001b[43mstat\\u001b[49m\\u001b[43m(\\u001b[49m\\u001b[43mpcap_filepath\\u001b[49m\\u001b[43m)\\u001b[49m\\u001b[38;5;241m.\\u001b[39mst_size\\n\\u001b[0;32m    232\\u001b[0m     \\u001b[38;5;28;01mwith\\u001b[39;00m \\u001b[38;5;28mopen\\u001b[39m(pcap_filepath, \\u001b[38;5;124m'\\u001b[39m\\u001b[38;5;124mrb\\u001b[39m\\u001b[38;5;124m'\\u001b[39m) \\u001b[38;5;28;01mas\\u001b[39;00m pcapfile:\\n\\u001b[0;32m    233\\u001b[0m         fc \\u001b[38;5;241m=\\u001b[39m pcapfile\\u001b[38;5;241m.\\u001b[39mread()\\n\",\r\n      \"\\u001b[1;31mFileNotFoundError\\u001b[0m: [WinError 3] The system cannot find the path specified: './generated/data/falling.pcap'\"\r\n     ],\r\n     \"output_type\": \"error\"\r\n    }\r\n   ],\r\n   \"source\": [\r\n    \"# x_all = loadFromDat(f\\\"./{test_dir}/falling.pcap\\\")\"\r\n   ]\r\n  }\r\n ],\r\n \"metadata\": {\r\n  \"kernelspec\": {\r\n   \"display_name\": \"Python 3 (ipykernel)\",\r\n   \"language\": \"python\",\r\n   \"name\": \"python3\"\r\n  },\r\n  \"language_info\": {\r\n   \"codemirror_mode\": {\r\n    \"name\": \"ipython\",\r\n    \"version\": 3\r\n   },\r\n   \"file_extension\": \".py\",\r\n   \"mimetype\": \"text/x-python\",\r\n   \"name\": \"python\",\r\n   \"nbconvert_exporter\": \"python\",\r\n   \"pygments_lexer\": \"ipython3\",\r\n   \"version\": \"3.10.7\"\r\n  }\r\n },\r\n \"nbformat\": 4,\r\n \"nbformat_minor\": 5\r\n}\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/FYP/trial1/FYPModel.ipynb b/FYP/trial1/FYPModel.ipynb
+--- a/FYP/trial1/FYPModel.ipynb	(revision 4ecaa717c3eff92b88bb8af932d429d947a72f7e)
++++ b/FYP/trial1/FYPModel.ipynb	(date 1678903625701)
+@@ -2,7 +2,8 @@
+  "cells": [
+   {
+    "cell_type": "code",
+-   "execution_count": 1,
++   "execution_count": 64,
++   "id": "341d5e4d",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+@@ -20,10 +21,11 @@
+     "import glob\n",
+     "from numpy import inf\n",
+     "from tensorflow.keras.layers import Bidirectional\n",
++    "from tensorflow.keras.layers import Dropout\n",
+     "\n",
+     "\n",
+     "import numpy as np\n",
+-    "from tensorflow.keras.optimizers import RMSprop\n",
++    "from tensorflow.keras.optimizers import RMSprop, Adam\n",
+     "from tensorflow.keras.callbacks import EarlyStopping\n",
+     "import os\n",
+     "\n",
+@@ -35,7 +37,8 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 60,
++   "execution_count": 2,
++   "id": "abc84286",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+@@ -47,6 +50,7 @@
+   {
+    "cell_type": "code",
+    "execution_count": 3,
++   "id": "9c5d33f0",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+@@ -56,7 +60,8 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 4,
++   "execution_count": 55,
++   "id": "5158db98",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+@@ -73,14 +78,13 @@
+     "    average_sample_rate = csi_data.nsamples/final_timestamp\n",
+     "    \n",
+     "    interp_func=interp1d(csi_data.timestamps, csi_data.csi, kind='linear', axis=0, fill_value=\"extrapolate\")\n",
+-    "    t_new = np.linspace(first_timestamp, last_timestamp, (csi_data.nsamples-1)*int((100/average_sample_rate)+1))\n",
++    "    t_new = np.linspace(first_timestamp, last_timestamp, int((csi_data.nsamples) * (100 / average_sample_rate)))\n",
+     "    csi_interp = interp_func(t_new)\n",
+     "    csi=csi_interp\n",
+     "    \n",
+     "    csi = db(np.abs(csi))\n",
+     "    finalData = csi[:, :, 0]\n",
+     "    finalData = np.transpose(finalData)\n",
+-    "    \n",
+     "    new_average_sample_rate = len(csi_interp)/final_timestamp\n",
+     "    \n",
+     "    if new_average_sample_rate > FS:\n",
+@@ -99,13 +103,13 @@
+     "    except ValueError as e:\n",
+     "        positiveInput = np.zeros((1, windowSize, 256))\n",
+     "    positiveInput[positiveInput == -inf] = 0\n",
+-    "    \n",
+     "    return positiveInput"
+    ]
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 39,
++   "execution_count": 52,
++   "id": "ca439d91",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+@@ -114,8 +118,11 @@
+     "    if activity not in activities:\n",
+     "        print(\"invalid activity: \" + activity)\n",
+     "    \n",
++    "    # selects pcap file based on activity label\n",
+     "    dataPathPattern = os.path.join(directory,\"{}*.pcap\".format(activity))\n",
+     "    inputFiles = sorted(glob.glob(dataPathPattern, recursive =True))\n",
++    "    \n",
++    "    \n",
+     "    inputWindows = []\n",
+     "    index = 0\n",
+     "    for inputFile in inputFiles:\n",
+@@ -131,7 +138,8 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 63,
++   "execution_count": 53,
++   "id": "37876560",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+@@ -139,7 +147,6 @@
+     "    x_all = []\n",
+     "    y_all = []\n",
+     "    for activity in activities:\n",
+-    "        print(activity)\n",
+     "        inputArray, outputLabels = loadByActivityLabel(directory, activity, activities, windowSize=windowSize, step=step, downsample=downsample)\n",
+     "        x_all.append(inputArray)\n",
+     "        y_all.append(outputLabels)\n",
+@@ -150,123 +157,18 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 45,
++   "execution_count": 56,
++   "id": "7f8cc8d8",
+    "metadata": {},
+-   "outputs": [
+-    {
+-     "name": "stdout",
+-     "output_type": "stream",
+-     "text": [
+-      "[[0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]\n",
+-      " [0. 1. 0. 0.]]\n"
+-     ]
+-    }
+-   ],
++   "outputs": [],
+    "source": [
+     "x_all, y_all = loadDataForActivities(dataset_dir, downsample=1)"
+    ]
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 8,
++   "execution_count": 59,
++   "id": "3c40ae78",
+    "metadata": {},
+    "outputs": [
+     {
+@@ -274,89 +176,89 @@
+       "text/plain": [
+        "(array([[[75.82117487, 91.1968139 , 42.14419939, ..., 24.4870632 ,\n",
+        "          23.97940009, 17.63427994],\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 25.13374666,\n",
+-       "          18.82639991, 23.98065317],\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 25.95279419,\n",
+-       "          15.27814445, 23.73498563],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 25.1347905 ,\n",
++       "          18.78975498, 23.97936264],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 25.96613542,\n",
++       "          15.33398486, 23.73263348],\n",
+        "         ...,\n",
+-       "         [75.82117487, 91.18616539, 42.14419939, ..., 24.09829638,\n",
+-       "          20.2568525 , 20.38573453],\n",
+-       "         [75.82117487, 91.19448347, 42.14419939, ..., 27.89504509,\n",
+-       "          29.00928825, 22.21924811],\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 27.52979228,\n",
+-       "          27.65363008, 10.51237856]],\n",
++       "         [75.82117487, 91.19021667, 42.14419939, ..., 25.64008746,\n",
++       "          25.57924497, 21.32572677],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 28.64687535,\n",
++       "          29.63363434, 20.32588782],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 26.33107627,\n",
++       "          26.00627462, 15.60355078]],\n",
+        " \n",
+-       "        [[75.82117487, 91.1968139 , 42.14419939, ..., 14.76296322,\n",
+-       "          15.05162086, 15.90466465],\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 21.79406852,\n",
+-       "          12.90583814,  6.44155676],\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 22.47093636,\n",
+-       "          -1.78505337, 10.7315378 ],\n",
++       "        [[75.82117487, 91.1968139 , 42.14419939, ..., 17.7513596 ,\n",
++       "          14.88443834, 13.41696608],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 21.922997  ,\n",
++       "          10.73371871,  6.83228863],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 22.71201053,\n",
++       "          -1.78621133, 12.13500842],\n",
+        "         ...,\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 16.13510665,\n",
+-       "          20.97791257, 18.88112592],\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 20.97930441,\n",
+-       "          24.99119238, 18.41497335],\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 15.92481179,\n",
+-       "          25.61219306, 22.83090038]],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 20.96188038,\n",
++       "          24.4614971 , 18.00369934],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 17.09643874,\n",
++       "          25.39842633, 21.76020737],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 16.34233412,\n",
++       "          26.38637074, 25.51482861]],\n",
+        " \n",
+-       "        [[75.82117487, 91.1968139 , 42.14419939, ..., 22.40417253,\n",
+-       "          23.77547445, 17.12401013],\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 18.0255944 ,\n",
+-       "          22.59137094, 14.78709788],\n",
+-       "         [75.82117487, 91.19142942, 42.14419939, ..., 25.93229568,\n",
+-       "          24.5171462 ,  8.95397592],\n",
++       "        [[75.82117487, 91.1968139 , 42.14419939, ..., 12.54327974,\n",
++       "          21.6755542 , 15.22425537],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 24.98154004,\n",
++       "          25.378989  , 16.24634501],\n",
++       "         [75.82117487, 91.18267977, 42.14419939, ..., 25.65603617,\n",
++       "          20.77814272, 12.36023541],\n",
+        "         ...,\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 12.84427063,\n",
+-       "          26.3094485 , 14.45832885],\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 19.30709067,\n",
+-       "          26.58115924, 15.0053414 ],\n",
+-       "         [75.82117487, 91.1968139 , 42.14419939, ..., 23.59524859,\n",
+-       "          26.87178047, 15.72369611]],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 19.25332396,\n",
++       "          26.57832717, 14.99884384],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 23.57780399,\n",
++       "          26.8702776 , 15.71979315],\n",
++       "         [75.82117487, 91.1968139 , 42.14419939, ..., 26.53212514,\n",
++       "          27.17670503, 16.53212514]],\n",
+        " \n",
+        "        ...,\n",
+        " \n",
+        "        [[75.82117487, 91.06631452, 42.14419939, ..., 14.62397998,\n",
+        "           0.        , 16.98970004],\n",
+-       "         [75.82117487, 91.06631452, 42.14419939, ..., 11.41763098,\n",
+-       "           8.82807451, 13.86020512],\n",
+-       "         [75.82117487, 91.05845019, 42.14419939, ..., 16.0888489 ,\n",
+-       "          13.92731552,  9.29750567],\n",
++       "         [75.82117487, 91.06631452, 42.14419939, ..., 12.03062426,\n",
++       "           9.17586692, 14.16776977],\n",
++       "         [75.82117487, 91.0577488 , 42.14419939, ..., 16.07921161,\n",
++       "          14.08266147,  8.68995491],\n",
+        "         ...,\n",
+-       "         [75.82117487, 91.1020832 , 42.14419939, ..., 24.06610815,\n",
+-       "          19.79947997, 19.64413103],\n",
+-       "         [75.82117487, 91.11040668, 42.14419939, ..., 22.49767363,\n",
+-       "          19.77495005, 21.10800498],\n",
+-       "         [75.82117487, 91.12058766, 42.14419939, ..., 19.08228923,\n",
+-       "          20.53650674, 22.52644483]],\n",
++       "         [75.82117487, 91.14101743, 42.14419939, ..., 14.77796058,\n",
++       "          19.67136353, 17.13715506],\n",
++       "         [75.82117487, 91.16434783, 42.14419939, ..., 26.69882894,\n",
++       "          23.01974108, 13.49604343],\n",
++       "         [75.82117487, 91.18789274, 42.14419939, ..., 31.5562648 ,\n",
++       "          26.50405828, 20.59539489]],\n",
+        " \n",
+-       "        [[75.82117487, 91.10476487, 42.14419939, ..., 18.58359495,\n",
+-       "          18.8699314 , 17.50737479],\n",
+-       "         [75.82117487, 91.11235961, 42.14419939, ..., 17.76279596,\n",
+-       "          24.69241505, 18.66112548],\n",
+-       "         [75.82117487, 91.11766573, 42.14419939, ..., 15.38406491,\n",
+-       "          26.71586305, 18.47830241],\n",
++       "        [[75.82117487, 91.11616605, 42.14419939, ..., 17.33277701,\n",
++       "          26.64286428, 19.29164796],\n",
++       "         [75.82117487, 91.11766573, 42.14419939, ..., 11.0294679 ,\n",
++       "          25.59071294, 16.47150833],\n",
++       "         [75.82117487, 91.11766573, 42.14419939, ...,  1.98549397,\n",
++       "          23.0143865 , 13.66570717],\n",
+        "         ...,\n",
+-       "         [75.82117487, 91.18259482, 42.14419939, ..., 21.46083444,\n",
+-       "          17.29662132, 16.68904269],\n",
+-       "         [75.82117487, 91.17507637, 42.14419939, ..., 20.88748599,\n",
+-       "          12.40242633, 12.88640925],\n",
+-       "         [76.09022325, 91.18536947, 42.14419939, ..., 21.32912012,\n",
+-       "          16.39198411, 11.47134808]],\n",
++       "         [77.14785622, 91.28165731, 42.14419939, ..., 21.2154992 ,\n",
++       "          23.3469186 , 18.27942533],\n",
++       "         [77.14785622, 91.30605332, 42.14419939, ..., 29.0161807 ,\n",
++       "          27.19839154, 18.3037217 ],\n",
++       "         [77.14785622, 91.30605332, 42.14419939, ..., 25.65195449,\n",
++       "          26.56323325, 19.77023566]],\n",
+        " \n",
+-       "        [[75.82117487, 91.14304765, 42.14419939, ..., 16.75028103,\n",
+-       "          19.84911031, 16.46484284],\n",
+-       "         [75.82117487, 91.1657134 , 42.14419939, ..., 27.06974109,\n",
+-       "          23.24266076, 13.87516862],\n",
+-       "         [75.82117487, 91.18858164, 42.14419939, ..., 31.66398239,\n",
+-       "          26.59314436, 20.76298614],\n",
++       "        [[75.82117487, 91.19489106, 42.14419939, ..., 17.53856072,\n",
++       "          -5.24385463,  8.17651707],\n",
++       "         [75.82117487, 91.18934676, 42.14419939, ..., 17.72257495,\n",
++       "           6.54937554, 15.51736416],\n",
++       "         [75.82117487, 91.183814  , 42.14419939, ..., 22.70747562,\n",
++       "          11.37412724, 19.45593938],\n",
+        "         ...,\n",
+-       "         [75.82117487, 91.05928503, 42.14419939, ...,  7.99575711,\n",
+-       "          14.8753149 ,  6.89991384],\n",
+-       "         [75.82117487, 91.07582427, 42.14419939, ...,  4.90110117,\n",
+-       "          14.19624628, 13.01925974],\n",
+-       "         [75.82117487, 91.09233784, 42.14419939, ..., 10.04711236,\n",
+-       "          15.46241316, 16.42093069]]]),\n",
++       "         [75.82117487, 91.09867161, 42.14419939, ..., 22.41830953,\n",
++       "          19.22537647,  5.16301787],\n",
++       "         [75.82117487, 91.09536432, 42.14419939, ..., 22.3466304 ,\n",
++       "          23.69031402,  8.2926441 ],\n",
++       "         [75.82117487, 91.10648839, 42.14419939, ..., 17.17677941,\n",
++       "          18.86411666,  8.3728833 ]]]),\n",
+        " array([[1., 0., 0., 0.],\n",
+        "        [1., 0., 0., 0.],\n",
+        "        [1., 0., 0., 0.],\n",
+@@ -366,7 +268,7 @@
+        "        [0., 0., 0., 1.]]))"
+       ]
+      },
+-     "execution_count": 8,
++     "execution_count": 59,
+      "metadata": {},
+      "output_type": "execute_result"
+     }
+@@ -377,25 +279,27 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 36,
++   "execution_count": 60,
++   "id": "9c5ec5f4",
+    "metadata": {},
+    "outputs": [
+     {
+      "name": "stdout",
+      "output_type": "stream",
+      "text": [
+-      "256\n"
++      "(1010, 100, 256)\n"
+      ]
+     }
+    ],
+    "source": [
+     "x_train, x_val, y_train, y_val = train_test_split(x_all, y_all, stratify=y_all, test_size = 0.3, random_state=42)\n",
+-    "print(len(x_val[0][3]))"
++    "print(x_train.shape)"
+    ]
+   },
+   {
+    "cell_type": "code",
+    "execution_count": 10,
++   "id": "b3293646",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+@@ -410,33 +314,111 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 11,
++   "execution_count": 65,
++   "id": "b215fe02",
++   "metadata": {},
++   "outputs": [
++    {
++     "ename": "ValueError",
++     "evalue": "Graph disconnected: cannot obtain value for tensor KerasTensor(type_spec=TensorSpec(shape=(None, 100, 256), dtype=tf.float32, name='input_5'), name='input_5', description=\"created by layer 'input_5'\") at layer \"dense_11\". The following previous layers were accessed without issue: []",
++     "output_type": "error",
++     "traceback": [
++      "\u001b[1;31m---------------------------------------------------------------------------\u001b[0m",
++      "\u001b[1;31mValueError\u001b[0m                                Traceback (most recent call last)",
++      "Cell \u001b[1;32mIn [65], line 5\u001b[0m\n\u001b[0;32m      3\u001b[0m x \u001b[38;5;241m=\u001b[39m Dense(\u001b[38;5;241m1024\u001b[39m, activation\u001b[38;5;241m=\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mrelu\u001b[39m\u001b[38;5;124m\"\u001b[39m)(x)\n\u001b[0;32m      4\u001b[0m outputs \u001b[38;5;241m=\u001b[39m Dense(\u001b[38;5;241m10\u001b[39m, activation\u001b[38;5;241m=\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124msoftmax\u001b[39m\u001b[38;5;124m\"\u001b[39m)(x)\n\u001b[1;32m----> 5\u001b[0m overfitting_model \u001b[38;5;241m=\u001b[39m Model(inputs, outputs)\n\u001b[0;32m      6\u001b[0m overfitting_model\u001b[38;5;241m.\u001b[39mcompile(optimizer\u001b[38;5;241m=\u001b[39mRMSprop(learning_rate\u001b[38;5;241m=\u001b[39m\u001b[38;5;241m0.0001\u001b[39m), loss\u001b[38;5;241m=\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124msparse_categorical_crossentropy\u001b[39m\u001b[38;5;124m\"\u001b[39m)\n",
++      "File \u001b[1;32m~\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\tensorflow\\python\\trackable\\base.py:205\u001b[0m, in \u001b[0;36mno_automatic_dependency_tracking.<locals>._method_wrapper\u001b[1;34m(self, *args, **kwargs)\u001b[0m\n\u001b[0;32m    203\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_self_setattr_tracking \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;01mFalse\u001b[39;00m  \u001b[38;5;66;03m# pylint: disable=protected-access\u001b[39;00m\n\u001b[0;32m    204\u001b[0m \u001b[38;5;28;01mtry\u001b[39;00m:\n\u001b[1;32m--> 205\u001b[0m   result \u001b[38;5;241m=\u001b[39m method(\u001b[38;5;28mself\u001b[39m, \u001b[38;5;241m*\u001b[39margs, \u001b[38;5;241m*\u001b[39m\u001b[38;5;241m*\u001b[39mkwargs)\n\u001b[0;32m    206\u001b[0m \u001b[38;5;28;01mfinally\u001b[39;00m:\n\u001b[0;32m    207\u001b[0m   \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_self_setattr_tracking \u001b[38;5;241m=\u001b[39m previous_value  \u001b[38;5;66;03m# pylint: disable=protected-access\u001b[39;00m\n",
++      "File \u001b[1;32m~\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\keras\\engine\\functional.py:165\u001b[0m, in \u001b[0;36mFunctional.__init__\u001b[1;34m(self, inputs, outputs, name, trainable, **kwargs)\u001b[0m\n\u001b[0;32m    156\u001b[0m     \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;28mall\u001b[39m(\n\u001b[0;32m    157\u001b[0m         [\n\u001b[0;32m    158\u001b[0m             functional_utils\u001b[38;5;241m.\u001b[39mis_input_keras_tensor(t)\n\u001b[0;32m    159\u001b[0m             \u001b[38;5;28;01mfor\u001b[39;00m t \u001b[38;5;129;01min\u001b[39;00m tf\u001b[38;5;241m.\u001b[39mnest\u001b[38;5;241m.\u001b[39mflatten(inputs)\n\u001b[0;32m    160\u001b[0m         ]\n\u001b[0;32m    161\u001b[0m     ):\n\u001b[0;32m    162\u001b[0m         inputs, outputs \u001b[38;5;241m=\u001b[39m functional_utils\u001b[38;5;241m.\u001b[39mclone_graph_nodes(\n\u001b[0;32m    163\u001b[0m             inputs, outputs\n\u001b[0;32m    164\u001b[0m         )\n\u001b[1;32m--> 165\u001b[0m \u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43m_init_graph_network\u001b[49m\u001b[43m(\u001b[49m\u001b[43minputs\u001b[49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[43moutputs\u001b[49m\u001b[43m)\u001b[49m\n",
++      "File \u001b[1;32m~\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\tensorflow\\python\\trackable\\base.py:205\u001b[0m, in \u001b[0;36mno_automatic_dependency_tracking.<locals>._method_wrapper\u001b[1;34m(self, *args, **kwargs)\u001b[0m\n\u001b[0;32m    203\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_self_setattr_tracking \u001b[38;5;241m=\u001b[39m \u001b[38;5;28;01mFalse\u001b[39;00m  \u001b[38;5;66;03m# pylint: disable=protected-access\u001b[39;00m\n\u001b[0;32m    204\u001b[0m \u001b[38;5;28;01mtry\u001b[39;00m:\n\u001b[1;32m--> 205\u001b[0m   result \u001b[38;5;241m=\u001b[39m method(\u001b[38;5;28mself\u001b[39m, \u001b[38;5;241m*\u001b[39margs, \u001b[38;5;241m*\u001b[39m\u001b[38;5;241m*\u001b[39mkwargs)\n\u001b[0;32m    206\u001b[0m \u001b[38;5;28;01mfinally\u001b[39;00m:\n\u001b[0;32m    207\u001b[0m   \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_self_setattr_tracking \u001b[38;5;241m=\u001b[39m previous_value  \u001b[38;5;66;03m# pylint: disable=protected-access\u001b[39;00m\n",
++      "File \u001b[1;32m~\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\keras\\engine\\functional.py:264\u001b[0m, in \u001b[0;36mFunctional._init_graph_network\u001b[1;34m(self, inputs, outputs)\u001b[0m\n\u001b[0;32m    261\u001b[0m     \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_input_coordinates\u001b[38;5;241m.\u001b[39mappend((layer, node_index, tensor_index))\n\u001b[0;32m    263\u001b[0m \u001b[38;5;66;03m# Keep track of the network's nodes and layers.\u001b[39;00m\n\u001b[1;32m--> 264\u001b[0m nodes, nodes_by_depth, layers, _ \u001b[38;5;241m=\u001b[39m \u001b[43m_map_graph_network\u001b[49m\u001b[43m(\u001b[49m\n\u001b[0;32m    265\u001b[0m \u001b[43m    \u001b[49m\u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43minputs\u001b[49m\u001b[43m,\u001b[49m\u001b[43m \u001b[49m\u001b[38;5;28;43mself\u001b[39;49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43moutputs\u001b[49m\n\u001b[0;32m    266\u001b[0m \u001b[43m\u001b[49m\u001b[43m)\u001b[49m\n\u001b[0;32m    267\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_network_nodes \u001b[38;5;241m=\u001b[39m nodes\n\u001b[0;32m    268\u001b[0m \u001b[38;5;28mself\u001b[39m\u001b[38;5;241m.\u001b[39m_nodes_by_depth \u001b[38;5;241m=\u001b[39m nodes_by_depth\n",
++      "File \u001b[1;32m~\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\keras\\engine\\functional.py:1128\u001b[0m, in \u001b[0;36m_map_graph_network\u001b[1;34m(inputs, outputs)\u001b[0m\n\u001b[0;32m   1126\u001b[0m \u001b[38;5;28;01mfor\u001b[39;00m x \u001b[38;5;129;01min\u001b[39;00m tf\u001b[38;5;241m.\u001b[39mnest\u001b[38;5;241m.\u001b[39mflatten(node\u001b[38;5;241m.\u001b[39mkeras_inputs):\n\u001b[0;32m   1127\u001b[0m     \u001b[38;5;28;01mif\u001b[39;00m \u001b[38;5;28mid\u001b[39m(x) \u001b[38;5;129;01mnot\u001b[39;00m \u001b[38;5;129;01min\u001b[39;00m computable_tensors:\n\u001b[1;32m-> 1128\u001b[0m         \u001b[38;5;28;01mraise\u001b[39;00m \u001b[38;5;167;01mValueError\u001b[39;00m(\n\u001b[0;32m   1129\u001b[0m             \u001b[38;5;124mf\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mGraph disconnected: cannot obtain value for \u001b[39m\u001b[38;5;124m\"\u001b[39m\n\u001b[0;32m   1130\u001b[0m             \u001b[38;5;124mf\u001b[39m\u001b[38;5;124m'\u001b[39m\u001b[38;5;124mtensor \u001b[39m\u001b[38;5;132;01m{\u001b[39;00mx\u001b[38;5;132;01m}\u001b[39;00m\u001b[38;5;124m at layer \u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;132;01m{\u001b[39;00mlayer\u001b[38;5;241m.\u001b[39mname\u001b[38;5;132;01m}\u001b[39;00m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124m. \u001b[39m\u001b[38;5;124m'\u001b[39m\n\u001b[0;32m   1131\u001b[0m             \u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mThe following previous layers were accessed \u001b[39m\u001b[38;5;124m\"\u001b[39m\n\u001b[0;32m   1132\u001b[0m             \u001b[38;5;124mf\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124mwithout issue: \u001b[39m\u001b[38;5;132;01m{\u001b[39;00mlayers_with_complete_input\u001b[38;5;132;01m}\u001b[39;00m\u001b[38;5;124m\"\u001b[39m\n\u001b[0;32m   1133\u001b[0m         )\n\u001b[0;32m   1134\u001b[0m \u001b[38;5;28;01mfor\u001b[39;00m x \u001b[38;5;129;01min\u001b[39;00m tf\u001b[38;5;241m.\u001b[39mnest\u001b[38;5;241m.\u001b[39mflatten(node\u001b[38;5;241m.\u001b[39moutputs):\n\u001b[0;32m   1135\u001b[0m     computable_tensors\u001b[38;5;241m.\u001b[39madd(\u001b[38;5;28mid\u001b[39m(x))\n",
++      "\u001b[1;31mValueError\u001b[0m: Graph disconnected: cannot obtain value for tensor KerasTensor(type_spec=TensorSpec(shape=(None, 100, 256), dtype=tf.float32, name='input_5'), name='input_5', description=\"created by layer 'input_5'\") at layer \"dense_11\". The following previous layers were accessed without issue: []"
++     ]
++    }
++   ],
++   "source": [
++    "x = Input(shape=(100, 256))\n",
++    "x = Dense(1024, activation=\"relu\")(x)\n",
++    "x = Dense(1024, activation=\"relu\")(x)\n",
++    "outputs = Dense(10, activation=\"softmax\")(x)\n",
++    "overfitting_model = Model(inputs, outputs)\n",
++    "overfitting_model.compile(optimizer=RMSprop(learning_rate=0.0001), loss=\"sparse_categorical_crossentropy\")"
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": 66,
++   "id": "ebe33650",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+     "model = Sequential()\n",
++    "# 100 timesteps, 256 subcarriers/features\n",
++    "model.add(Input(shape=(100,256)))\n",
+     "model.add(Conv1D(filters=128, kernel_size=5, activation='relu', strides=1))\n",
+-    "model.add(MaxPooling1D(pool_size=4))\n",
+-    "# model.add(Conv1D(filters=128, kernel_size=5, activation='relu'))\n",
+-    "# model.add(MaxPooling1D(pool_size=4))\n",
++    "model.add(Conv1D(filters=128, kernel_size=5, activation='relu'))\n",
++    "model.add(Dropout(0.5))\n",
++    "model.add(MaxPooling1D(pool_size=2))\n",
+     "model.add(Bidirectional(LSTM(units=200, return_sequences=False)))\n",
+-    "# model.add(Bidirectional(LSTM(units=200, return_sequences=False)))\n",
+     "model.add(Flatten())\n",
+     "model.add(Dense(4, activation='softmax'))\n"
+    ]
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 12,
++   "execution_count": 67,
++   "id": "613566ca",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+-    "model.compile(optimizer=RMSprop(learning_rate=0.0001), loss=\"categorical_crossentropy\", metrics=[\"accuracy\"])"
++    "model.compile(optimizer=Adam(learning_rate=0.0001), loss=\"categorical_crossentropy\", metrics=[\"accuracy\"])"
+    ]
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 13,
++   "execution_count": 68,
++   "id": "a461708b",
++   "metadata": {},
++   "outputs": [
++    {
++     "name": "stdout",
++     "output_type": "stream",
++     "text": [
++      "Model: \"sequential_7\"\n",
++      "_________________________________________________________________\n",
++      " Layer (type)                Output Shape              Param #   \n",
++      "=================================================================\n",
++      " conv1d_13 (Conv1D)          (None, 96, 128)           163968    \n",
++      "                                                                 \n",
++      " conv1d_14 (Conv1D)          (None, 92, 128)           82048     \n",
++      "                                                                 \n",
++      " dropout (Dropout)           (None, 92, 128)           0         \n",
++      "                                                                 \n",
++      " max_pooling1d_12 (MaxPoolin  (None, 46, 128)          0         \n",
++      " g1D)                                                            \n",
++      "                                                                 \n",
++      " bidirectional_8 (Bidirectio  (None, 400)              526400    \n",
++      " nal)                                                            \n",
++      "                                                                 \n",
++      " flatten_7 (Flatten)         (None, 400)               0         \n",
++      "                                                                 \n",
++      " dense_14 (Dense)            (None, 4)                 1604      \n",
++      "                                                                 \n",
++      "=================================================================\n",
++      "Total params: 774,020\n",
++      "Trainable params: 774,020\n",
++      "Non-trainable params: 0\n",
++      "_________________________________________________________________\n"
++     ]
++    }
++   ],
++   "source": [
++    "model.summary()"
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": 69,
++   "id": "ece75cd5",
+    "metadata": {},
+    "outputs": [
+     {
+@@ -444,220 +426,220 @@
+      "output_type": "stream",
+      "text": [
+       "Epoch 1/100\n",
+-      "5/5 [==============================] - 16s 1s/step - loss: 1.3261 - accuracy: 0.4058 - val_loss: 1.0839 - val_accuracy: 0.6139\n",
++      "4/4 [==============================] - 17s 3s/step - loss: 1.4580 - accuracy: 0.2574 - val_loss: 1.3375 - val_accuracy: 0.3111\n",
+       "Epoch 2/100\n",
+-      "5/5 [==============================] - 3s 620ms/step - loss: 1.0489 - accuracy: 0.6239 - val_loss: 1.0341 - val_accuracy: 0.4713\n",
++      "4/4 [==============================] - 6s 2s/step - loss: 1.2904 - accuracy: 0.3871 - val_loss: 1.2706 - val_accuracy: 0.4332\n",
+       "Epoch 3/100\n",
+-      "5/5 [==============================] - 3s 625ms/step - loss: 0.9559 - accuracy: 0.6290 - val_loss: 0.9498 - val_accuracy: 0.5901\n",
++      "4/4 [==============================] - 6s 2s/step - loss: 1.2639 - accuracy: 0.3752 - val_loss: 1.1598 - val_accuracy: 0.4585\n",
+       "Epoch 4/100\n",
+-      "5/5 [==============================] - 3s 595ms/step - loss: 1.0129 - accuracy: 0.5671 - val_loss: 0.9298 - val_accuracy: 0.6119\n",
++      "4/4 [==============================] - 6s 2s/step - loss: 1.2291 - accuracy: 0.3851 - val_loss: 1.1545 - val_accuracy: 0.3479\n",
+       "Epoch 5/100\n",
+-      "5/5 [==============================] - 3s 634ms/step - loss: 0.8274 - accuracy: 0.7224 - val_loss: 0.8356 - val_accuracy: 0.7228\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 1.1775 - accuracy: 0.4366 - val_loss: 1.0093 - val_accuracy: 0.6175\n",
+       "Epoch 6/100\n",
+-      "5/5 [==============================] - 3s 591ms/step - loss: 0.7992 - accuracy: 0.7088 - val_loss: 0.8467 - val_accuracy: 0.6673\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 1.1291 - accuracy: 0.4812 - val_loss: 0.9093 - val_accuracy: 0.6935\n",
+       "Epoch 7/100\n",
+-      "5/5 [==============================] - 3s 666ms/step - loss: 0.7573 - accuracy: 0.7767 - val_loss: 0.7039 - val_accuracy: 0.8198\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 1.0757 - accuracy: 0.5297 - val_loss: 0.8702 - val_accuracy: 0.7074\n",
+       "Epoch 8/100\n",
+-      "5/5 [==============================] - 3s 579ms/step - loss: 0.6777 - accuracy: 0.7980 - val_loss: 0.9544 - val_accuracy: 0.5406\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.9896 - accuracy: 0.5950 - val_loss: 0.8236 - val_accuracy: 0.8111\n",
+       "Epoch 9/100\n",
+-      "5/5 [==============================] - 3s 550ms/step - loss: 0.7556 - accuracy: 0.7250 - val_loss: 0.6257 - val_accuracy: 0.7941\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.9210 - accuracy: 0.6366 - val_loss: 0.7717 - val_accuracy: 0.7650\n",
+       "Epoch 10/100\n",
+-      "5/5 [==============================] - 3s 591ms/step - loss: 0.6705 - accuracy: 0.7419 - val_loss: 0.6433 - val_accuracy: 0.8277\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.8751 - accuracy: 0.6545 - val_loss: 0.6900 - val_accuracy: 0.7926\n",
+       "Epoch 11/100\n",
+-      "5/5 [==============================] - 3s 549ms/step - loss: 0.6501 - accuracy: 0.8065 - val_loss: 0.6452 - val_accuracy: 0.7267\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.8237 - accuracy: 0.7119 - val_loss: 0.5894 - val_accuracy: 0.8571\n",
+       "Epoch 12/100\n",
+-      "5/5 [==============================] - 3s 519ms/step - loss: 0.6123 - accuracy: 0.7521 - val_loss: 0.5842 - val_accuracy: 0.8218\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.7391 - accuracy: 0.7465 - val_loss: 0.5509 - val_accuracy: 0.8779\n",
+       "Epoch 13/100\n",
+-      "5/5 [==============================] - 3s 579ms/step - loss: 0.5408 - accuracy: 0.8081 - val_loss: 0.7025 - val_accuracy: 0.7960\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.6733 - accuracy: 0.7931 - val_loss: 0.5092 - val_accuracy: 0.8710\n",
+       "Epoch 14/100\n",
+-      "5/5 [==============================] - 3s 563ms/step - loss: 0.5586 - accuracy: 0.8430 - val_loss: 0.5248 - val_accuracy: 0.8594\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.6043 - accuracy: 0.7921 - val_loss: 0.4559 - val_accuracy: 0.8917\n",
+       "Epoch 15/100\n",
+-      "5/5 [==============================] - 3s 576ms/step - loss: 0.6341 - accuracy: 0.7462 - val_loss: 0.8549 - val_accuracy: 0.6653\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.5521 - accuracy: 0.8267 - val_loss: 0.3944 - val_accuracy: 0.8779\n",
+       "Epoch 16/100\n",
+-      "5/5 [==============================] - 3s 583ms/step - loss: 0.5891 - accuracy: 0.8014 - val_loss: 0.4933 - val_accuracy: 0.8535\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.5004 - accuracy: 0.8396 - val_loss: 0.3818 - val_accuracy: 0.8894\n",
+       "Epoch 17/100\n",
+-      "5/5 [==============================] - 3s 595ms/step - loss: 0.5424 - accuracy: 0.7810 - val_loss: 0.7013 - val_accuracy: 0.7050\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.4792 - accuracy: 0.8347 - val_loss: 0.3955 - val_accuracy: 0.8018\n",
+       "Epoch 18/100\n",
+-      "5/5 [==============================] - 3s 580ms/step - loss: 0.4844 - accuracy: 0.8582 - val_loss: 0.4938 - val_accuracy: 0.8000\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.4560 - accuracy: 0.8317 - val_loss: 0.3402 - val_accuracy: 0.8387\n",
+       "Epoch 19/100\n",
+-      "5/5 [==============================] - 3s 568ms/step - loss: 0.5382 - accuracy: 0.7479 - val_loss: 0.4433 - val_accuracy: 0.8376\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.4234 - accuracy: 0.8475 - val_loss: 0.3321 - val_accuracy: 0.8479\n",
+       "Epoch 20/100\n",
+-      "5/5 [==============================] - 3s 573ms/step - loss: 0.3990 - accuracy: 0.8803 - val_loss: 0.7981 - val_accuracy: 0.7129\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.3857 - accuracy: 0.8663 - val_loss: 0.2943 - val_accuracy: 0.8525\n",
+       "Epoch 21/100\n",
+-      "5/5 [==============================] - 3s 595ms/step - loss: 0.5747 - accuracy: 0.7869 - val_loss: 0.4599 - val_accuracy: 0.8673\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.3494 - accuracy: 0.8960 - val_loss: 0.2988 - val_accuracy: 0.8571\n",
+       "Epoch 22/100\n",
+-      "5/5 [==============================] - 3s 598ms/step - loss: 0.4858 - accuracy: 0.8124 - val_loss: 0.4811 - val_accuracy: 0.8059\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.3444 - accuracy: 0.8931 - val_loss: 0.2528 - val_accuracy: 0.8940\n",
+       "Epoch 23/100\n",
+-      "5/5 [==============================] - 3s 563ms/step - loss: 0.4811 - accuracy: 0.7835 - val_loss: 0.5155 - val_accuracy: 0.8614\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.2916 - accuracy: 0.9158 - val_loss: 0.2322 - val_accuracy: 0.9217\n",
+       "Epoch 24/100\n",
+-      "5/5 [==============================] - 3s 577ms/step - loss: 0.4171 - accuracy: 0.8710 - val_loss: 0.5192 - val_accuracy: 0.8040\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.2899 - accuracy: 0.9208 - val_loss: 0.2018 - val_accuracy: 0.9286\n",
+       "Epoch 25/100\n",
+-      "5/5 [==============================] - 3s 595ms/step - loss: 0.4843 - accuracy: 0.7674 - val_loss: 0.5273 - val_accuracy: 0.7545\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.2589 - accuracy: 0.9376 - val_loss: 0.1759 - val_accuracy: 0.9378\n",
+       "Epoch 26/100\n",
+-      "5/5 [==============================] - 3s 580ms/step - loss: 0.3947 - accuracy: 0.8820 - val_loss: 0.3479 - val_accuracy: 0.9426\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.2455 - accuracy: 0.9327 - val_loss: 0.1654 - val_accuracy: 0.9585\n",
+       "Epoch 27/100\n",
+-      "5/5 [==============================] - 3s 580ms/step - loss: 0.5354 - accuracy: 0.7742 - val_loss: 0.6245 - val_accuracy: 0.7188\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.2301 - accuracy: 0.9366 - val_loss: 0.1848 - val_accuracy: 0.9194\n",
+       "Epoch 28/100\n",
+-      "5/5 [==============================] - 3s 567ms/step - loss: 0.4351 - accuracy: 0.8625 - val_loss: 0.5998 - val_accuracy: 0.7723\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.2392 - accuracy: 0.9238 - val_loss: 0.1735 - val_accuracy: 0.9309\n",
+       "Epoch 29/100\n",
+-      "5/5 [==============================] - 3s 561ms/step - loss: 0.5012 - accuracy: 0.7564 - val_loss: 0.4676 - val_accuracy: 0.8356\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.2309 - accuracy: 0.9327 - val_loss: 0.2122 - val_accuracy: 0.9055\n",
+       "Epoch 30/100\n",
+-      "5/5 [==============================] - 3s 599ms/step - loss: 0.4232 - accuracy: 0.8591 - val_loss: 0.4966 - val_accuracy: 0.8000\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.2199 - accuracy: 0.9337 - val_loss: 0.2034 - val_accuracy: 0.9078\n",
+       "Epoch 31/100\n",
+-      "5/5 [==============================] - 3s 567ms/step - loss: 0.4542 - accuracy: 0.7869 - val_loss: 0.4389 - val_accuracy: 0.8554\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.2050 - accuracy: 0.9327 - val_loss: 0.1888 - val_accuracy: 0.9194\n",
+       "Epoch 32/100\n",
+-      "5/5 [==============================] - 3s 560ms/step - loss: 0.4085 - accuracy: 0.8404 - val_loss: 0.6202 - val_accuracy: 0.7802\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.1982 - accuracy: 0.9455 - val_loss: 0.1401 - val_accuracy: 0.9401\n",
+       "Epoch 33/100\n",
+-      "5/5 [==============================] - 3s 557ms/step - loss: 0.4021 - accuracy: 0.8735 - val_loss: 0.3409 - val_accuracy: 0.9406\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.1673 - accuracy: 0.9564 - val_loss: 0.1171 - val_accuracy: 0.9631\n",
+       "Epoch 34/100\n",
+-      "5/5 [==============================] - 3s 571ms/step - loss: 0.4993 - accuracy: 0.7954 - val_loss: 0.4500 - val_accuracy: 0.8020\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.1505 - accuracy: 0.9663 - val_loss: 0.1142 - val_accuracy: 0.9608\n",
+       "Epoch 35/100\n",
+-      "5/5 [==============================] - 3s 592ms/step - loss: 0.3600 - accuracy: 0.8718 - val_loss: 0.4254 - val_accuracy: 0.8673\n",
++      "4/4 [==============================] - 7s 2s/step - loss: 0.1401 - accuracy: 0.9653 - val_loss: 0.1039 - val_accuracy: 0.9562\n",
+       "Epoch 36/100\n",
+-      "5/5 [==============================] - 3s 551ms/step - loss: 0.4614 - accuracy: 0.7912 - val_loss: 0.5500 - val_accuracy: 0.8099\n",
++      "4/4 [==============================] - 8s 2s/step - loss: 0.1264 - accuracy: 0.9663 - val_loss: 0.1108 - val_accuracy: 0.9539\n",
+       "Epoch 37/100\n",
+-      "5/5 [==============================] - 3s 556ms/step - loss: 0.3638 - accuracy: 0.8964 - val_loss: 0.4088 - val_accuracy: 0.8238\n",
++      "4/4 [==============================] - 7s 2s/step - loss: 0.1193 - accuracy: 0.9683 - val_loss: 0.0986 - val_accuracy: 0.9608\n",
+       "Epoch 38/100\n",
+-      "5/5 [==============================] - 3s 578ms/step - loss: 0.4473 - accuracy: 0.8192 - val_loss: 0.4280 - val_accuracy: 0.8079\n",
++      "4/4 [==============================] - 7s 2s/step - loss: 0.1127 - accuracy: 0.9634 - val_loss: 0.0985 - val_accuracy: 0.9585\n",
+       "Epoch 39/100\n",
+-      "5/5 [==============================] - 3s 559ms/step - loss: 0.3337 - accuracy: 0.8905 - val_loss: 0.4231 - val_accuracy: 0.8059\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.1130 - accuracy: 0.9653 - val_loss: 0.0965 - val_accuracy: 0.9631\n",
+       "Epoch 40/100\n",
+-      "5/5 [==============================] - 3s 582ms/step - loss: 0.4318 - accuracy: 0.8200 - val_loss: 0.5316 - val_accuracy: 0.7941\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.1132 - accuracy: 0.9634 - val_loss: 0.0911 - val_accuracy: 0.9631\n",
+       "Epoch 41/100\n",
+-      "5/5 [==============================] - 3s 568ms/step - loss: 0.3985 - accuracy: 0.8616 - val_loss: 0.2979 - val_accuracy: 0.9564\n",
++      "4/4 [==============================] - 9s 3s/step - loss: 0.1027 - accuracy: 0.9663 - val_loss: 0.0966 - val_accuracy: 0.9585\n",
+       "Epoch 42/100\n",
+-      "5/5 [==============================] - 3s 568ms/step - loss: 0.4665 - accuracy: 0.7903 - val_loss: 0.3387 - val_accuracy: 0.8257\n",
++      "4/4 [==============================] - 6s 1s/step - loss: 0.0971 - accuracy: 0.9693 - val_loss: 0.0892 - val_accuracy: 0.9677\n",
+       "Epoch 43/100\n",
+-      "5/5 [==============================] - 3s 581ms/step - loss: 0.4084 - accuracy: 0.8065 - val_loss: 0.4446 - val_accuracy: 0.7901\n",
++      "4/4 [==============================] - 7s 2s/step - loss: 0.0937 - accuracy: 0.9683 - val_loss: 0.0937 - val_accuracy: 0.9631\n",
+       "Epoch 44/100\n",
+-      "5/5 [==============================] - 3s 575ms/step - loss: 0.3575 - accuracy: 0.8786 - val_loss: 0.3451 - val_accuracy: 0.9406\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.1001 - accuracy: 0.9683 - val_loss: 0.0912 - val_accuracy: 0.9631\n",
+       "Epoch 45/100\n",
+-      "5/5 [==============================] - 3s 590ms/step - loss: 0.3964 - accuracy: 0.8370 - val_loss: 0.4042 - val_accuracy: 0.8079\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0931 - accuracy: 0.9683 - val_loss: 0.0906 - val_accuracy: 0.9654\n",
+       "Epoch 46/100\n",
+-      "5/5 [==============================] - 3s 577ms/step - loss: 0.3731 - accuracy: 0.8404 - val_loss: 0.4147 - val_accuracy: 0.8891\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0932 - accuracy: 0.9723 - val_loss: 0.0842 - val_accuracy: 0.9631\n",
+       "Epoch 47/100\n",
+-      "5/5 [==============================] - 3s 593ms/step - loss: 0.3310 - accuracy: 0.8964 - val_loss: 0.5967 - val_accuracy: 0.7842\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0866 - accuracy: 0.9713 - val_loss: 0.0914 - val_accuracy: 0.9724\n",
+       "Epoch 48/100\n",
+-      "5/5 [==============================] - 3s 582ms/step - loss: 0.4290 - accuracy: 0.8192 - val_loss: 0.3841 - val_accuracy: 0.8356\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0987 - accuracy: 0.9644 - val_loss: 0.0927 - val_accuracy: 0.9677\n",
+       "Epoch 49/100\n",
+-      "5/5 [==============================] - 3s 644ms/step - loss: 0.3367 - accuracy: 0.8540 - val_loss: 0.7162 - val_accuracy: 0.7485\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0882 - accuracy: 0.9733 - val_loss: 0.0823 - val_accuracy: 0.9677\n",
+       "Epoch 50/100\n",
+-      "5/5 [==============================] - 3s 524ms/step - loss: 0.3598 - accuracy: 0.8973 - val_loss: 0.2948 - val_accuracy: 0.9208\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0897 - accuracy: 0.9693 - val_loss: 0.0895 - val_accuracy: 0.9631\n",
+       "Epoch 51/100\n",
+-      "5/5 [==============================] - 3s 552ms/step - loss: 0.4530 - accuracy: 0.8065 - val_loss: 0.4255 - val_accuracy: 0.8158\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0865 - accuracy: 0.9713 - val_loss: 0.0796 - val_accuracy: 0.9700\n",
+       "Epoch 52/100\n",
+-      "5/5 [==============================] - 3s 557ms/step - loss: 0.3405 - accuracy: 0.8769 - val_loss: 0.3711 - val_accuracy: 0.8950\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0925 - accuracy: 0.9683 - val_loss: 0.1108 - val_accuracy: 0.9677\n",
+       "Epoch 53/100\n",
+-      "5/5 [==============================] - 3s 573ms/step - loss: 0.3905 - accuracy: 0.8506 - val_loss: 0.4036 - val_accuracy: 0.8099\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.1179 - accuracy: 0.9614 - val_loss: 0.1943 - val_accuracy: 0.9194\n",
+       "Epoch 54/100\n",
+-      "5/5 [==============================] - 3s 599ms/step - loss: 0.3952 - accuracy: 0.8141 - val_loss: 0.3290 - val_accuracy: 0.8931\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.2030 - accuracy: 0.9188 - val_loss: 0.4020 - val_accuracy: 0.7788\n",
+       "Epoch 55/100\n",
+-      "5/5 [==============================] - 3s 552ms/step - loss: 0.3115 - accuracy: 0.8871 - val_loss: 0.4638 - val_accuracy: 0.7960\n",
++      "4/4 [==============================] - 6s 2s/step - loss: 0.3433 - accuracy: 0.8426 - val_loss: 0.1288 - val_accuracy: 0.9631\n",
+       "Epoch 56/100\n",
+-      "5/5 [==============================] - 3s 587ms/step - loss: 0.3811 - accuracy: 0.8285 - val_loss: 0.3626 - val_accuracy: 0.9168\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.2597 - accuracy: 0.8861 - val_loss: 0.2711 - val_accuracy: 0.8456\n",
+       "Epoch 57/100\n",
+-      "5/5 [==============================] - 3s 587ms/step - loss: 0.3472 - accuracy: 0.8718 - val_loss: 0.3688 - val_accuracy: 0.8198\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.2478 - accuracy: 0.8911 - val_loss: 0.2232 - val_accuracy: 0.9171\n",
+       "Epoch 58/100\n",
+-      "5/5 [==============================] - 3s 571ms/step - loss: 0.3489 - accuracy: 0.8497 - val_loss: 0.3794 - val_accuracy: 0.9129\n"
++      "4/4 [==============================] - 4s 1s/step - loss: 0.1836 - accuracy: 0.9376 - val_loss: 0.1896 - val_accuracy: 0.9078\n",
++      "Epoch 59/100\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.1608 - accuracy: 0.9485 - val_loss: 0.0946 - val_accuracy: 0.9677\n"
+      ]
+     },
+     {
+      "name": "stdout",
+      "output_type": "stream",
+      "text": [
+-      "Epoch 59/100\n",
+-      "5/5 [==============================] - 3s 566ms/step - loss: 0.3715 - accuracy: 0.8472 - val_loss: 0.3226 - val_accuracy: 0.8317\n",
+       "Epoch 60/100\n",
+-      "5/5 [==============================] - 3s 568ms/step - loss: 0.3657 - accuracy: 0.8328 - val_loss: 0.3826 - val_accuracy: 0.8376\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.1226 - accuracy: 0.9574 - val_loss: 0.0898 - val_accuracy: 0.9654\n",
+       "Epoch 61/100\n",
+-      "5/5 [==============================] - 3s 541ms/step - loss: 0.3934 - accuracy: 0.8514 - val_loss: 0.3469 - val_accuracy: 0.8297\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.1082 - accuracy: 0.9693 - val_loss: 0.1092 - val_accuracy: 0.9608\n",
+       "Epoch 62/100\n",
+-      "5/5 [==============================] - 3s 583ms/step - loss: 0.3708 - accuracy: 0.8217 - val_loss: 0.3406 - val_accuracy: 0.8515\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0937 - accuracy: 0.9723 - val_loss: 0.0885 - val_accuracy: 0.9654\n",
+       "Epoch 63/100\n",
+-      "5/5 [==============================] - 3s 599ms/step - loss: 0.2464 - accuracy: 0.9372 - val_loss: 0.2637 - val_accuracy: 0.8931\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0833 - accuracy: 0.9762 - val_loss: 0.0907 - val_accuracy: 0.9631\n",
+       "Epoch 64/100\n",
+-      "5/5 [==============================] - 3s 552ms/step - loss: 0.4109 - accuracy: 0.8158 - val_loss: 0.3545 - val_accuracy: 0.8752\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0773 - accuracy: 0.9733 - val_loss: 0.0822 - val_accuracy: 0.9677\n",
+       "Epoch 65/100\n",
+-      "5/5 [==============================] - 3s 569ms/step - loss: 0.3498 - accuracy: 0.8633 - val_loss: 0.2701 - val_accuracy: 0.9129\n",
++      "4/4 [==============================] - 8s 2s/step - loss: 0.0788 - accuracy: 0.9683 - val_loss: 0.0833 - val_accuracy: 0.9608\n",
+       "Epoch 66/100\n",
+-      "5/5 [==============================] - 3s 581ms/step - loss: 0.3021 - accuracy: 0.8803 - val_loss: 0.3468 - val_accuracy: 0.9406\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0686 - accuracy: 0.9762 - val_loss: 0.0736 - val_accuracy: 0.9677\n",
+       "Epoch 67/100\n",
+-      "5/5 [==============================] - 3s 585ms/step - loss: 0.3679 - accuracy: 0.8480 - val_loss: 0.2989 - val_accuracy: 0.8396\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0689 - accuracy: 0.9792 - val_loss: 0.0762 - val_accuracy: 0.9677\n",
+       "Epoch 68/100\n",
+-      "5/5 [==============================] - 3s 622ms/step - loss: 0.3462 - accuracy: 0.8277 - val_loss: 0.3221 - val_accuracy: 0.9168\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0648 - accuracy: 0.9782 - val_loss: 0.0784 - val_accuracy: 0.9747\n",
+       "Epoch 69/100\n",
+-      "5/5 [==============================] - 3s 602ms/step - loss: 0.2940 - accuracy: 0.9092 - val_loss: 0.3706 - val_accuracy: 0.8198\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.0613 - accuracy: 0.9792 - val_loss: 0.0771 - val_accuracy: 0.9724\n",
+       "Epoch 70/100\n",
+-      "5/5 [==============================] - 3s 598ms/step - loss: 0.3821 - accuracy: 0.8065 - val_loss: 0.2764 - val_accuracy: 0.9109\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.0668 - accuracy: 0.9752 - val_loss: 0.0736 - val_accuracy: 0.9608\n",
+       "Epoch 71/100\n",
+-      "5/5 [==============================] - 3s 593ms/step - loss: 0.2156 - accuracy: 0.9380 - val_loss: 0.4724 - val_accuracy: 0.7050\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.0624 - accuracy: 0.9802 - val_loss: 0.0689 - val_accuracy: 0.9724\n",
+       "Epoch 72/100\n",
+-      "5/5 [==============================] - 3s 587ms/step - loss: 0.4367 - accuracy: 0.8370 - val_loss: 0.3803 - val_accuracy: 0.8099\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0595 - accuracy: 0.9782 - val_loss: 0.0681 - val_accuracy: 0.9700\n",
+       "Epoch 73/100\n",
+-      "5/5 [==============================] - 3s 573ms/step - loss: 0.3694 - accuracy: 0.7954 - val_loss: 0.3626 - val_accuracy: 0.8713\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0575 - accuracy: 0.9792 - val_loss: 0.0684 - val_accuracy: 0.9724\n",
+       "Epoch 74/100\n",
+-      "5/5 [==============================] - 3s 586ms/step - loss: 0.3203 - accuracy: 0.8744 - val_loss: 0.3975 - val_accuracy: 0.8158\n",
++      "4/4 [==============================] - 6s 2s/step - loss: 0.0655 - accuracy: 0.9752 - val_loss: 0.0743 - val_accuracy: 0.9677\n",
+       "Epoch 75/100\n",
+-      "5/5 [==============================] - 3s 558ms/step - loss: 0.3506 - accuracy: 0.8311 - val_loss: 0.2818 - val_accuracy: 0.8713\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0598 - accuracy: 0.9772 - val_loss: 0.0732 - val_accuracy: 0.9654\n",
+       "Epoch 76/100\n",
+-      "5/5 [==============================] - 3s 600ms/step - loss: 0.2410 - accuracy: 0.9219 - val_loss: 0.3225 - val_accuracy: 0.8752\n",
++      "4/4 [==============================] - 6s 2s/step - loss: 0.0581 - accuracy: 0.9822 - val_loss: 0.0840 - val_accuracy: 0.9631\n",
+       "Epoch 77/100\n",
+-      "5/5 [==============================] - 3s 585ms/step - loss: 0.3287 - accuracy: 0.8693 - val_loss: 0.4295 - val_accuracy: 0.8139\n",
++      "4/4 [==============================] - 6s 2s/step - loss: 0.0562 - accuracy: 0.9812 - val_loss: 0.0713 - val_accuracy: 0.9724\n",
+       "Epoch 78/100\n",
+-      "5/5 [==============================] - 3s 563ms/step - loss: 0.3457 - accuracy: 0.8463 - val_loss: 0.3610 - val_accuracy: 0.9188\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0629 - accuracy: 0.9743 - val_loss: 0.0822 - val_accuracy: 0.9608\n",
+       "Epoch 79/100\n",
+-      "5/5 [==============================] - 3s 589ms/step - loss: 0.3341 - accuracy: 0.8803 - val_loss: 0.3460 - val_accuracy: 0.8218\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0520 - accuracy: 0.9832 - val_loss: 0.0714 - val_accuracy: 0.9677\n",
+       "Epoch 80/100\n",
+-      "5/5 [==============================] - 3s 572ms/step - loss: 0.3494 - accuracy: 0.8141 - val_loss: 0.3049 - val_accuracy: 0.9050\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0594 - accuracy: 0.9762 - val_loss: 0.0750 - val_accuracy: 0.9700\n",
+       "Epoch 81/100\n",
+-      "5/5 [==============================] - 3s 612ms/step - loss: 0.3435 - accuracy: 0.8642 - val_loss: 0.3479 - val_accuracy: 0.8178\n",
++      "4/4 [==============================] - 6s 1s/step - loss: 0.0514 - accuracy: 0.9832 - val_loss: 0.0713 - val_accuracy: 0.9724\n",
+       "Epoch 82/100\n",
+-      "5/5 [==============================] - 3s 609ms/step - loss: 0.2832 - accuracy: 0.8829 - val_loss: 0.2300 - val_accuracy: 0.9624\n",
++      "4/4 [==============================] - 6s 2s/step - loss: 0.0538 - accuracy: 0.9802 - val_loss: 0.0711 - val_accuracy: 0.9654\n",
+       "Epoch 83/100\n",
+-      "5/5 [==============================] - 3s 544ms/step - loss: 0.3291 - accuracy: 0.8633 - val_loss: 0.2479 - val_accuracy: 0.8832\n",
++      "4/4 [==============================] - 6s 1s/step - loss: 0.0528 - accuracy: 0.9792 - val_loss: 0.0661 - val_accuracy: 0.9747\n",
+       "Epoch 84/100\n",
+-      "5/5 [==============================] - 3s 586ms/step - loss: 0.3164 - accuracy: 0.8404 - val_loss: 0.3103 - val_accuracy: 0.8772\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0545 - accuracy: 0.9822 - val_loss: 0.0661 - val_accuracy: 0.9724\n",
+       "Epoch 85/100\n",
+-      "5/5 [==============================] - 3s 567ms/step - loss: 0.2225 - accuracy: 0.9465 - val_loss: 0.2069 - val_accuracy: 0.9485\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0522 - accuracy: 0.9822 - val_loss: 0.0627 - val_accuracy: 0.9724\n",
+       "Epoch 86/100\n",
+-      "5/5 [==============================] - 3s 583ms/step - loss: 0.3717 - accuracy: 0.8294 - val_loss: 0.3413 - val_accuracy: 0.8812\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0517 - accuracy: 0.9812 - val_loss: 0.0671 - val_accuracy: 0.9700\n",
+       "Epoch 87/100\n",
+-      "5/5 [==============================] - 3s 575ms/step - loss: 0.2532 - accuracy: 0.9363 - val_loss: 0.2501 - val_accuracy: 0.8832\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0517 - accuracy: 0.9812 - val_loss: 0.0688 - val_accuracy: 0.9700\n",
+       "Epoch 88/100\n",
+-      "5/5 [==============================] - 3s 545ms/step - loss: 0.4037 - accuracy: 0.7997 - val_loss: 0.3707 - val_accuracy: 0.8455\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0545 - accuracy: 0.9832 - val_loss: 0.0690 - val_accuracy: 0.9747\n",
+       "Epoch 89/100\n",
+-      "5/5 [==============================] - 3s 582ms/step - loss: 0.3203 - accuracy: 0.8778 - val_loss: 0.3789 - val_accuracy: 0.8139\n",
++      "4/4 [==============================] - 6s 2s/step - loss: 0.0522 - accuracy: 0.9792 - val_loss: 0.0655 - val_accuracy: 0.9770\n",
+       "Epoch 90/100\n",
+-      "5/5 [==============================] - 3s 605ms/step - loss: 0.3006 - accuracy: 0.8803 - val_loss: 0.2747 - val_accuracy: 0.9584\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0480 - accuracy: 0.9842 - val_loss: 0.0614 - val_accuracy: 0.9793\n",
+       "Epoch 91/100\n",
+-      "5/5 [==============================] - 3s 544ms/step - loss: 0.3265 - accuracy: 0.8650 - val_loss: 0.3401 - val_accuracy: 0.8297\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0483 - accuracy: 0.9832 - val_loss: 0.0566 - val_accuracy: 0.9839\n",
+       "Epoch 92/100\n",
+-      "5/5 [==============================] - 3s 570ms/step - loss: 0.2836 - accuracy: 0.8710 - val_loss: 0.2369 - val_accuracy: 0.9584\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.0480 - accuracy: 0.9822 - val_loss: 0.0584 - val_accuracy: 0.9793\n",
+       "Epoch 93/100\n",
+-      "5/5 [==============================] - 3s 533ms/step - loss: 0.3412 - accuracy: 0.8514 - val_loss: 0.2710 - val_accuracy: 0.8733\n",
++      "4/4 [==============================] - 4s 1s/step - loss: 0.0432 - accuracy: 0.9851 - val_loss: 0.0546 - val_accuracy: 0.9816\n",
+       "Epoch 94/100\n",
+-      "5/5 [==============================] - 3s 526ms/step - loss: 0.2272 - accuracy: 0.9261 - val_loss: 0.2496 - val_accuracy: 0.9525\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0448 - accuracy: 0.9842 - val_loss: 0.0564 - val_accuracy: 0.9793\n",
+       "Epoch 95/100\n",
+-      "5/5 [==============================] - 3s 603ms/step - loss: 0.3490 - accuracy: 0.8531 - val_loss: 0.2772 - val_accuracy: 0.8653\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0464 - accuracy: 0.9822 - val_loss: 0.0567 - val_accuracy: 0.9816\n",
+       "Epoch 96/100\n",
+-      "5/5 [==============================] - 3s 568ms/step - loss: 0.2973 - accuracy: 0.8684 - val_loss: 0.2707 - val_accuracy: 0.9267\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0496 - accuracy: 0.9822 - val_loss: 0.0569 - val_accuracy: 0.9839\n",
+       "Epoch 97/100\n",
+-      "5/5 [==============================] - 3s 597ms/step - loss: 0.2514 - accuracy: 0.8964 - val_loss: 0.6006 - val_accuracy: 0.8020\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0479 - accuracy: 0.9822 - val_loss: 0.0517 - val_accuracy: 0.9793\n",
+       "Epoch 98/100\n",
+-      "5/5 [==============================] - 3s 591ms/step - loss: 0.3247 - accuracy: 0.8990 - val_loss: 0.2606 - val_accuracy: 0.9347\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0409 - accuracy: 0.9851 - val_loss: 0.0585 - val_accuracy: 0.9700\n",
+       "Epoch 99/100\n",
+-      "5/5 [==============================] - 3s 566ms/step - loss: 0.2829 - accuracy: 0.8862 - val_loss: 0.4022 - val_accuracy: 0.8119\n",
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0413 - accuracy: 0.9851 - val_loss: 0.0547 - val_accuracy: 0.9793\n",
+       "Epoch 100/100\n",
+-      "5/5 [==============================] - 3s 594ms/step - loss: 0.2882 - accuracy: 0.8846 - val_loss: 0.2475 - val_accuracy: 0.9465\n"
++      "4/4 [==============================] - 5s 1s/step - loss: 0.0445 - accuracy: 0.9822 - val_loss: 0.0506 - val_accuracy: 0.9862\n"
+      ]
+     },
+     {
+      "data": {
+       "text/plain": [
+-       "<keras.callbacks.History at 0x2be864ea230>"
++       "<keras.callbacks.History at 0x2ac04549330>"
+       ]
+      },
+-     "execution_count": 13,
++     "execution_count": 69,
+      "metadata": {},
+      "output_type": "execute_result"
+     }
+@@ -668,14 +650,15 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 59,
++   "execution_count": 14,
++   "id": "ff6f901f",
+    "metadata": {},
+    "outputs": [
+     {
+      "name": "stdout",
+      "output_type": "stream",
+      "text": [
+-      "16/16 [==============================] - 1s 41ms/step\n",
++      "16/16 [==============================] - 6s 42ms/step\n",
+       "256\n"
+      ]
+     }
+@@ -688,6 +671,7 @@
+   {
+    "cell_type": "code",
+    "execution_count": 15,
++   "id": "7df6514b",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+@@ -697,27 +681,28 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 17,
++   "execution_count": 16,
++   "id": "760018bd",
+    "metadata": {},
+    "outputs": [
+     {
+      "name": "stdout",
+      "output_type": "stream",
+      "text": [
+-      "[[161   0   3   0]\n",
+-      " [  0  70  16   0]\n",
+-      " [  5   3 158   0]\n",
++      "[[164   0   0   0]\n",
++      " [  0  80   6   0]\n",
++      " [ 70   7  89   0]\n",
+       " [  0   0   0  89]]\n",
+       "              precision    recall  f1-score   support\n",
+       "\n",
+-      "      static       0.97      0.98      0.98       164\n",
+-      "    standing       0.96      0.81      0.88        86\n",
+-      "     walking       0.89      0.95      0.92       166\n",
++      "      static       0.70      1.00      0.82       164\n",
++      "    standing       0.92      0.93      0.92        86\n",
++      "     walking       0.94      0.54      0.68       166\n",
+       "     falling       1.00      1.00      1.00        89\n",
+       "\n",
+-      "    accuracy                           0.95       505\n",
+-      "   macro avg       0.96      0.94      0.94       505\n",
+-      "weighted avg       0.95      0.95      0.95       505\n",
++      "    accuracy                           0.84       505\n",
++      "   macro avg       0.89      0.87      0.86       505\n",
++      "weighted avg       0.87      0.84      0.83       505\n",
+       "\n"
+      ]
+     }
+@@ -729,7 +714,8 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 18,
++   "execution_count": 17,
++   "id": "45dd60c1",
+    "metadata": {},
+    "outputs": [],
+    "source": [
+@@ -738,23 +724,10 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": null,
++   "execution_count": 18,
++   "id": "b924f9d9",
+    "metadata": {},
+-   "outputs": [
+-    {
+-     "ename": "FileNotFoundError",
+-     "evalue": "[WinError 3] The system cannot find the path specified: './generated/data/falling.pcap'",
+-     "traceback": [
+-      "\u001b[1;31m---------------------------------------------------------------------------\u001b[0m",
+-      "\u001b[1;31mFileNotFoundError\u001b[0m                         Traceback (most recent call last)",
+-      "Cell \u001b[1;32mIn [66], line 1\u001b[0m\n\u001b[1;32m----> 1\u001b[0m x_all \u001b[38;5;241m=\u001b[39m loadFromDat(\u001b[38;5;124mf\u001b[39m\u001b[38;5;124m\"\u001b[39m\u001b[38;5;124m./\u001b[39m\u001b[38;5;132;01m{\u001b[39;00mtest_dir\u001b[38;5;132;01m}\u001b[39;00m\u001b[38;5;124m/falling.pcap\u001b[39m\u001b[38;5;124m\"\u001b[39m)\n",
+-      "Cell \u001b[1;32mIn [4], line 4\u001b[0m, in \u001b[0;36mloadFromDat\u001b[1;34m(inputFile, windowSize, step)\u001b[0m\n\u001b[0;32m      1\u001b[0m \u001b[38;5;28;01mdef\u001b[39;00m \u001b[38;5;21mloadFromDat\u001b[39m(inputFile, windowSize \u001b[38;5;241m=\u001b[39m FS, step \u001b[38;5;241m=\u001b[39m \u001b[38;5;241m50\u001b[39m):\n\u001b[0;32m      2\u001b[0m \u001b[38;5;66;03m#     print(int((csi_data.nsamples-1)*(100/average_sample_rate)+1))\u001b[39;00m\n\u001b[1;32m----> 4\u001b[0m     csi_data \u001b[38;5;241m=\u001b[39m \u001b[43mread_pcap\u001b[49m\u001b[43m(\u001b[49m\u001b[43minputFile\u001b[49m\u001b[43m)\u001b[49m\n\u001b[0;32m      5\u001b[0m     csi \u001b[38;5;241m=\u001b[39m csi_data\u001b[38;5;241m.\u001b[39mcsi\n\u001b[0;32m      8\u001b[0m     first_timestamp \u001b[38;5;241m=\u001b[39m \u001b[38;5;28mfloat\u001b[39m(csi_data\u001b[38;5;241m.\u001b[39mtimestamps[\u001b[38;5;241m0\u001b[39m])\n",
+-      "File \u001b[1;32m~\\PycharmProjects\\FYP\\trial1\\decoders\\interleaved.py:231\u001b[0m, in \u001b[0;36mread_pcap\u001b[1;34m(pcap_filepath, bandwidth, nsamples_max)\u001b[0m\n\u001b[0;32m    220\u001b[0m \u001b[38;5;28;01mdef\u001b[39;00m \u001b[38;5;21mread_pcap\u001b[39m(pcap_filepath, bandwidth\u001b[38;5;241m=\u001b[39m\u001b[38;5;241m0\u001b[39m, nsamples_max\u001b[38;5;241m=\u001b[39m\u001b[38;5;241m0\u001b[39m):\n\u001b[0;32m    221\u001b[0m     \u001b[38;5;124;03m'''\u001b[39;00m\n\u001b[0;32m    222\u001b[0m \u001b[38;5;124;03m        Reads CSI samples from\u001b[39;00m\n\u001b[0;32m    223\u001b[0m \u001b[38;5;124;03m        a pcap file. A SampleSet\u001b[39;00m\n\u001b[1;32m   (...)\u001b[0m\n\u001b[0;32m    228\u001b[0m \u001b[38;5;124;03m        default, but you can also set them explicitly.\u001b[39;00m\n\u001b[0;32m    229\u001b[0m \u001b[38;5;124;03m    '''\u001b[39;00m\n\u001b[1;32m--> 231\u001b[0m     pcap_filesize \u001b[38;5;241m=\u001b[39m \u001b[43mos\u001b[49m\u001b[38;5;241;43m.\u001b[39;49m\u001b[43mstat\u001b[49m\u001b[43m(\u001b[49m\u001b[43mpcap_filepath\u001b[49m\u001b[43m)\u001b[49m\u001b[38;5;241m.\u001b[39mst_size\n\u001b[0;32m    232\u001b[0m     \u001b[38;5;28;01mwith\u001b[39;00m \u001b[38;5;28mopen\u001b[39m(pcap_filepath, \u001b[38;5;124m'\u001b[39m\u001b[38;5;124mrb\u001b[39m\u001b[38;5;124m'\u001b[39m) \u001b[38;5;28;01mas\u001b[39;00m pcapfile:\n\u001b[0;32m    233\u001b[0m         fc \u001b[38;5;241m=\u001b[39m pcapfile\u001b[38;5;241m.\u001b[39mread()\n",
+-      "\u001b[1;31mFileNotFoundError\u001b[0m: [WinError 3] The system cannot find the path specified: './generated/data/falling.pcap'"
+-     ],
+-     "output_type": "error"
+-    }
+-   ],
++   "outputs": [],
+    "source": [
+     "# x_all = loadFromDat(f\"./{test_dir}/falling.pcap\")"
+    ]

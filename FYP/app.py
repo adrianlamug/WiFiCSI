@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, flash, get_flashed_messages
-from FYP.trial1.plotters.newPlotter import Plotter
-from FYP.trial1.classifier import classify
+from plotters.plotter import Plotter
+from classifier import classify
 import matplotlib.pyplot as plt
 import os
 import random
@@ -26,9 +26,11 @@ def index():
     print(messages)
     if request.method == 'POST':
         selectedActivity = selected = request.form['activity']
+        print(selectedActivity)
         randomPcapFile = getPcapFileBasedOnActivity(selectedActivity)
         createPlotter(randomPcapFile)
         plotPath = os.path.join('static/images', 'generated.png')
+        # plotPath = 'generated.png'
         return render_template('index.html', plot_path=plotPath, selected=selected)
     return render_template('index.html', activities=activities,  messages=messages)
 
@@ -64,7 +66,7 @@ def runCommandOnPi():
     # stdin, stdout, stderr = ssh.exec_command(f"mcp -C 1 -N 1 -c 36/80 -m {macOfDevice}")
 
     # debugging
-    stdin, stdout, stderr = ssh.exec_command(f"mcp -C 1 -N 1 -c 36/80")
+    stdin, stdout, stderr = ssh.exec_command(f"mcp -C 1 -N 1 -c 36/80 -m B4:86:55:F4:8B:9E")
     result = stdout.read().decode()
 
     results = []
@@ -85,7 +87,7 @@ def runCommandOnPi():
 @app.route('/record-activity', methods=['POST'])
 def recordActivity():
     activity = request.form['activity'].lower()
-    rpiIP = "192.168.1.154"
+    rpiIP = "192.168.1.190"
     macOfDevice = getMacAddress().upper()
 
     ssh = paramiko.SSHClient()
@@ -94,8 +96,7 @@ def recordActivity():
     results = []
     commands = [
         # f"sudo tcpdump -i wlan0 dst port 5500 -vv -w {activity}-%s.pcap -G 3 -W 1 -Z root",
-        f"sudo tcpdump -i wlan0 dst port 5500 -vv -w {activity}.pcap -G 3 -W 1 -Z root",
-        "ls"
+        f"sudo tcpdump -i wlan0 dst port 5500 -vv -w {activity}.pcap -G 3 -W 1 -Z root"
     ]
     for command in commands:
         stdin, stdout, stderr = ssh.exec_command(command)
@@ -104,8 +105,9 @@ def recordActivity():
 
     # transferring recorded activity pcap file
     sftp = ssh.open_sftp()
-    filePath = f'generated/data/{activity}.pcap'
-    sftp.get(f'{activity}.pcap', filePath)
+    filePath = f'generated/data/generated.pcap'
+    sftp.get(f'generated.pcap', filePath)
+    print(filePath)
     sftp.close()
     classifiedActivity = classify(pcapFile=filePath)
     createPlotter(filePath)

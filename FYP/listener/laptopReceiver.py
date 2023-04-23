@@ -21,7 +21,7 @@ _fase = False
 
 # set to 500 so our images generate 5s = 100Hz Frequency
 # 100 samples per second as our ping is in intervals of 0.01
-windowSize = 1000
+windowSize = 200
 updates= 100
 
 bandwidth = int(input("Bandwidth:"))
@@ -29,7 +29,8 @@ nsub = bandwidth * 3.2
 
 # TCP_IP = "169.254.177.92"
 # TCP_IP = "169.254.103.233"
-TCP_IP = "192.168.1.6"
+# TCP_IP = "192.168.1.6"
+TCP_IP = "192.168.1.228"
 TCP_PORT = 5501
 BUFFER_SIZE = 512*4  # must store the bytes of each packet (n_sub * 4) + header nexmon (18 bytes)
 temporary_frames = np.zeros((2, windowSize, int(nsub)))
